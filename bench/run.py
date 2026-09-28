@@ -39,7 +39,8 @@ def load_cases():
 
 def run_case(case, rep, args, judge_gw):
     recs = []
-    gw = Gateway(model=args.model, reasoning=args.reasoning, log=recs.append)
+    gw = Gateway(model=args.model, base_url=args.base_url, api_key=args.api_key, reasoning=args.reasoning,
+                 idle_timeout=args.idle_timeout, log=recs.append)
     tmp = tempfile.mkdtemp(prefix="sandman_bench_")
     ctx = {"inputs": case["inputs"], "judge_gw": judge_gw}
     t0 = time.time()
@@ -114,7 +115,10 @@ def main():
     p = argparse.ArgumentParser()
     p.add_argument("--model", default=os.environ.get("SANDMAN_MODEL", "qwen/qwen3.6-35b-a3b"))
     p.add_argument("--judge-model", default=os.environ.get("SANDMAN_JUDGE_MODEL", "xiaomi/mimo-v2.6-pro"))
-    p.add_argument("--reasoning", action="store_true", help="enable thinking (default: off)")
+    p.add_argument("--reasoning", "--thinking", action="store_true", help="enable thinking (default: off)")
+    p.add_argument("--base-url", default=None, help="endpoint of the model under test (default $SANDMAN_BASE_URL or OpenRouter)")
+    p.add_argument("--api-key", default=None)
+    p.add_argument("--idle-timeout", type=float, default=None)
     p.add_argument("--repeat", type=int, default=1)
     p.add_argument("--full", action="store_true",
                    help="run all cases; default is the quick set (harness suite + sensitive core cases)")
@@ -130,7 +134,10 @@ def main():
         sel = args.only.split(",")
         cases = [c for c in cases if any(c["id"].startswith(s) or c["call"] == s or c["group"] == s
                                          or c.get("suite", "core") == s for s in sel)]
-    judge_gw = Gateway(model=args.judge_model, reasoning=True)
+    # the judge stays on OpenRouter even when the model under test is local
+    judge_gw = Gateway(model=args.judge_model, reasoning=True,
+                       base_url=os.environ.get("SANDMAN_JUDGE_BASE_URL", "https://openrouter.ai/api/v1"),
+                       api_key=os.environ.get("OPENROUTER_API_KEY"))
     jobs = [(c, r) for r in range(args.repeat) for c in cases]
     print(f"{'full' if args.full else 'quick'} set: {len(cases)} cases × {args.repeat} = {len(jobs)} runs on {args.model} "
           f"(reasoning {'on' if args.reasoning else 'off'}), judge {args.judge_model}")

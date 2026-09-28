@@ -67,6 +67,32 @@ On NixOS, uv's own downloaded Python and the prebuilt native wheel of
 `rpds-py` (a jsonschema dependency) may need `programs.nix-ld.enable = true`.
 Using the flake avoids that.
 
+### Local model (llama.cpp, vLLM, Ollama, …)
+
+Any OpenAI-compatible server works; pass the endpoint and the model name:
+
+```bash
+python -m sandman --base-url http://localhost:8080/v1 --model qwen3.6-35b-a3b chat
+python -m bench.run --base-url http://localhost:8080/v1 --model qwen3.6-35b-a3b --workers 1
+# or once: export SANDMAN_BASE_URL=http://localhost:8080/v1 SANDMAN_MODEL=qwen3.6-35b-a3b
+```
+
+For non-OpenRouter endpoints the gateway:
+- streams the response and only gives up when the server sends nothing for
+  `--idle-timeout` seconds (default 600); slow generation is never cut off,
+  and a timed-out request is not resent;
+- sends `chat_template_kwargs: {"enable_thinking": false}` (thinking off;
+  `--thinking` turns it on) and llama.cpp's `return_progress`, so prompt
+  processing counts as activity;
+- sends the schema as `response_format: {"type": "json_schema", …}`, which
+  llama.cpp turns into a grammar;
+- sends no API key unless `--api-key` / `$SANDMAN_API_KEY` is set (never the
+  OpenRouter key).
+
+The bench's judge stays on OpenRouter (`$OPENROUTER_API_KEY`), so local runs
+still need that key for the 13 judged cases. `--workers 1` avoids queueing
+parallel requests on a server with one slot (llama.cpp `-np`).
+
 ### Commands
 
 ```bash

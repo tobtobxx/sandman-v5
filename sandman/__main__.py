@@ -24,8 +24,10 @@ from .tools import FakeWeb, RealWeb
 def setup(a):
     os.makedirs(a.home, exist_ok=True)
     db = DB(os.path.join(a.home, "sandman.db"))
-    gw = Gateway(model=a.model, log=db.log_call)
-    large = Gateway(model=a.large_model, log=db.log_call) if a.large_model else None
+    conn = dict(base_url=a.base_url, api_key=a.api_key, reasoning=a.thinking, idle_timeout=a.idle_timeout)
+    gw = Gateway(model=a.model, log=db.log_call, **conn)
+    large = Gateway(model=a.large_model, log=db.log_call, **dict(conn, base_url=a.large_base_url or a.base_url)) \
+        if a.large_model else None
     if a.fake_web == "bench":
         from bench.corpus import PAGES
         web = FakeWeb(PAGES)
@@ -39,7 +41,14 @@ def setup(a):
 def main():
     p = argparse.ArgumentParser(prog="sandman")
     p.add_argument("--home", default=os.environ.get("SANDMAN_HOME", ".sandman"))
-    p.add_argument("--model", default=None)
+    p.add_argument("--model", default=None, help="model name (default $SANDMAN_MODEL or qwen/qwen3.6-35b-a3b)")
+    p.add_argument("--base-url", default=None,
+                   help="OpenAI-compatible endpoint, e.g. http://localhost:8080/v1 (default $SANDMAN_BASE_URL or OpenRouter)")
+    p.add_argument("--api-key", default=None, help="default $SANDMAN_API_KEY; $OPENROUTER_API_KEY only for OpenRouter")
+    p.add_argument("--thinking", action="store_true", help="let the model think (default off)")
+    p.add_argument("--idle-timeout", type=float, default=None,
+                   help="local servers: give up after this many seconds without data (default 600)")
+    p.add_argument("--large-base-url", default=None, help="endpoint for --large-model (default: --base-url)")
     p.add_argument("--large-model", default=os.environ.get("SANDMAN_LARGE_MODEL"))
     p.add_argument("--fake-web", help="JSON corpus [{url,title,text}] or 'bench' instead of the live web")
     p.add_argument("-q", "--quiet", dest="verbose", action="store_false")
