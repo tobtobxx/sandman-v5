@@ -12,6 +12,13 @@ thinking off, via OpenRouter.
   existing cards, several messages through router + front desk, and 4 full
   dispatcher pipelines (librarian → triage → planner → workers → verifier).
 
+`python -m bench.run` runs the **quick set** by default: the harness suite
+plus the 41 core cases that failed at least once in any recorded run
+(`bench/cases/quick.py`). The other 112 core cases passed every time and only
+run with `--full`. Quick set ×3: ~90 s, ~$0.11 (model $0.078 + judge $0.032);
+full ×3: ~140 s, ~$0.16. The saving is modest because the harness episodes are
+most of the cost; a single repeat (the default) is about a third of that.
+
 Checks are mechanical except 13 cases that use an LLM judge
 (`google/gemini-3.8-flash`, with reasoning).
 

@@ -29,6 +29,7 @@ bench/
                   long pages, files, memory, follow-ups, full dispatcher pipelines)
   corpus.py       fake web pages for worker episodes (incl. a prompt injection, a long page)
   run.py          runner + report with costs (bench/results/*.md|json)
+  cases/quick.py  which cases the default (quick) run includes
   compare.py      per-group and per-case diff of two runs
 tests/            offline tests of the harness with a scripted fake model
 docs/DEVIATIONS.md
@@ -41,7 +42,8 @@ pip install requests jsonschema pytest   # dateparser optional
 export OPENROUTER_API_KEY=...            # or SANDMAN_BASE_URL for a local llama.cpp/vLLM server
 
 python -m pytest tests                   # harness logic, no model needed
-python -m bench.run                      # full bench, default qwen/qwen3.6-35b-a3b, thinking off
+python -m bench.run                      # quick set (61 cases: harness suite + sensitive core cases)
+python -m bench.run --full               # all 173 cases; default model qwen/qwen3.6-35b-a3b, thinking off
 python -m bench.run --repeat 3 --only router,triage   # or --only harness
 python -m bench.compare bench/results/A.json bench/results/B.json
 python -m bench.run --model qwen/qwen3.8-flash

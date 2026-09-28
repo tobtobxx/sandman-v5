@@ -22,6 +22,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from sandman.llm import Gateway, LLMFailure
 
 from bench import cases as cases_pkg
+from bench.cases.quick import is_quick
 from bench.runners import RUNNERS
 
 HERE = os.path.dirname(__file__)
@@ -115,19 +116,23 @@ def main():
     p.add_argument("--judge-model", default=os.environ.get("SANDMAN_JUDGE_MODEL", "google/gemini-3.8-flash"))
     p.add_argument("--reasoning", action="store_true", help="enable thinking (default: off)")
     p.add_argument("--repeat", type=int, default=1)
+    p.add_argument("--full", action="store_true",
+                   help="run all cases; default is the quick set (harness suite + sensitive core cases)")
     p.add_argument("--only", default="", help="comma list of case-id prefixes, calls or groups")
     p.add_argument("--workers", type=int, default=8)
     p.add_argument("--tag", default="")
     args = p.parse_args()
 
     cases = load_cases()
+    if not args.full:
+        cases = [c for c in cases if is_quick(c)]
     if args.only:
         sel = args.only.split(",")
         cases = [c for c in cases if any(c["id"].startswith(s) or c["call"] == s or c["group"] == s
                                          or c.get("suite", "core") == s for s in sel)]
     judge_gw = Gateway(model=args.judge_model, reasoning=True)
     jobs = [(c, r) for r in range(args.repeat) for c in cases]
-    print(f"{len(cases)} cases × {args.repeat} = {len(jobs)} runs on {args.model} "
+    print(f"{'full' if args.full else 'quick'} set: {len(cases)} cases × {args.repeat} = {len(jobs)} runs on {args.model} "
           f"(reasoning {'on' if args.reasoning else 'off'}), judge {args.judge_model}")
     t0 = time.time()
     usage0 = key_usage(judge_gw)
@@ -153,7 +158,7 @@ def main():
     usage1 = key_usage(judge_gw)
     delta = f" · key usage Δ ${usage1 - usage0:.4f}" if usage0 is not None and usage1 is not None else ""
     header = (f"# Bench: {args.model} (reasoning {'on' if args.reasoning else 'off'}){' · ' + args.tag if args.tag else ''}\n\n"
-              f"{time.strftime('%Y-%m-%d %H:%M')} · {len(cases)} cases × {args.repeat} · overall pass "
+              f"{time.strftime('%Y-%m-%d %H:%M')} · {'full' if args.full else 'quick'} set · {len(cases)} cases × {args.repeat} · overall pass "
               f"{total:.1%} · {time.time() - t0:.0f}s\n\n"
               f"Cost (sum of usage.cost of every response, retries included): model ${cost:.4f} "
               f"(${cost / len(results):.5f} per case run, {sum(r['llm_calls'] for r in results)} calls) · "
@@ -174,10 +179,10 @@ def main():
     md = md.replace("\n## By suite", header[header.index("\nProviders"):] + "\n## By suite", 1)
     print("\n" + header)
     os.makedirs(os.path.join(HERE, "results"), exist_ok=True)
-    slug = re.sub(r"[^\w.-]", "_", args.model) + ("_think" if args.reasoning else "") + (f"_{args.tag}" if args.tag else "")
+    slug = re.sub(r"[^\w.-]", "_", args.model) + ("" if args.full else "_quick") + ("_think" if args.reasoning else "") + (f"_{args.tag}" if args.tag else "")
     base = os.path.join(HERE, "results", f"{slug}_{time.strftime('%Y%m%d-%H%M%S')}")
     open(base + ".md", "w").write(md)
-    json.dump({"model": args.model, "reasoning": args.reasoning, "tag": args.tag, "by_suite": by_suite,
+    json.dump({"model": args.model, "reasoning": args.reasoning, "tag": args.tag, "full": args.full, "by_suite": by_suite,
                "by_group": by_group, "by_call": by_call, "judge_cost": judge_gw.cost,
                "results": results}, open(base + ".json", "w"), indent=1, ensure_ascii=False, default=str)
     print(f"wrote {base}.md / .json")
