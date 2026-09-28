@@ -15,6 +15,11 @@
           packages = [
             (pkgs.python3.withPackages (p: [ p.requests p.jsonschema p.dateparser p.pytest ]))
           ];
+          shellHook = ''
+            export SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt
+            export NIX_SSL_CERT_FILE=$SSL_CERT_FILE
+            export REQUESTS_CA_BUNDLE=$SSL_CERT_FILE
+          '';
         };
       });
     };
