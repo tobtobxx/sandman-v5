@@ -35,7 +35,8 @@ bench/
   compare.py      per-group and per-case diff of two runs
 tests/            offline tests of the harness with a scripted fake model
 docs/            DESIGN.md (the design), ARCHITECTURE.md (how it is built), ROLES.md (every
-                  role: prompt, tools, output, harness rules), BENCH.md, DEVIATIONS.md
+                  role: prompt, tools, output, harness rules), BENCH.md, DEVIATIONS.md,
+                  FEEDBACK.md (what the prototype taught us about the design)
 ```
 
 ## Run
