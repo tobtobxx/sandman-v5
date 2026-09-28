@@ -1,5 +1,7 @@
 """Worker session (design §5.7): a loop of single-action model calls that must
 end in a terminal action. Independent of the DB so the bench can run it."""
+import time
+
 from . import calls
 from .llm import LLMFailure
 
@@ -53,6 +55,7 @@ def run_worker(gw, ctx, env, max_turns=None, allowed_terminals=None, on_step=Non
             return {"action": "fail", "category": "tool_error", "reason": f"model output invalid: {e}"}, steps
         if a["action"] in calls.TERMINALS:
             return a, steps
+        t0 = time.time()
         prev = next((i for i, (b, _) in enumerate(steps) if b == a), None)
         if prev is not None:  # weak models loop; don't re-run, point back instead
             r = f"You already did exactly this in step {prev + 1}. Use that result or choose another action."
@@ -66,7 +69,7 @@ def run_worker(gw, ctx, env, max_turns=None, allowed_terminals=None, on_step=Non
             r = env.execute(a)
         steps.append((a, r))
         if on_step:
-            on_step(k, a, r)
+            on_step(k, a, r, int((time.time() - t0) * 1000))
     # unreachable: the last turn's schema only allows terminal actions
     return {"action": "fail", "category": "tool_error", "reason": "no terminal action"}, steps
 

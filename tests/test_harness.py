@@ -20,7 +20,7 @@ class FakeGW:
     or a function(system, user, schema). Validates against the real schema."""
 
     def __init__(self, script):
-        self.script, self.log = script, []
+        self.script, self.log, self.model = script, [], "fake"
 
     def call(self, call_type, system, user, schema, temperature=0.0, check=None, meta=None, max_tokens=None):
         s = self.script.get(call_type)
@@ -73,6 +73,10 @@ def test_single_card_end_to_end(db, tmp_path):
     c = db.get("cards", c["id"])
     assert c["state"] == "done" and "89.90" in c["result"]["summary"]
     assert db.one("SELECT COUNT(*) n FROM facts")["n"] == 1
+    # tracing: one session per step, the worker's tool call recorded
+    assert [s["type"] for s in db.q("SELECT type FROM sessions ORDER BY rowid")] == ["preflight", "worker", "verifier"]
+    tc = db.one("SELECT * FROM tool_calls")
+    assert tc["tool"] == "web_search" and tc["args"] == {"query": "gardena micro drip price"}
 
 
 def test_verify_fail_retries_then_asks(db, tmp_path):

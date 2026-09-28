@@ -2,7 +2,7 @@
 session type and applies the resulting transition. All control flow is here."""
 import os
 
-from . import board, calls, memory, recipes, verifier
+from . import board, calls, memory, recipes, trace, verifier
 from .board import MAX_ATTEMPTS, MAX_CONTINUATIONS, MAX_DEPTH, TERMINAL, transition
 from .conversation import ask, fire_reminders, post
 from .llm import LLMFailure
@@ -28,13 +28,27 @@ class Dispatcher:
         if not c:
             return False
         self.log(f"· {c['id']} [{c['state']}/{c['kind']}/{c['role']}] {c['title']}")
-        if c["state"] == "new":
-            self.plan(c) if c["kind"] == "plan" else self.preflight(c)
-        elif c["state"] == "ready":
-            self.work(c)
-        elif c["state"] == "verifying":
-            self.verify(c)
+        kind = {"new": "planner" if c["kind"] == "plan" else "preflight", "ready": "worker",
+                "verifying": "verifier"}[c["state"]]
+        self.notes = []  # what happened in this session, in words (shown in the web UI)
+        with trace.session(db, kind, card_id=c["id"], topic_id=c["origin_topic_id"],
+                           model=self.gw_for(c).model if kind == "worker" else self.gw.model,
+                           state_before=c["state"], role=c["role"]) as s:
+            self.session = s
+            if kind == "planner":
+                self.plan(c)
+            elif kind == "preflight":
+                self.preflight(c)
+            elif kind == "worker":
+                self.work(c)
+            else:
+                self.verify(c)
+            s["outcome"] = "; ".join(self.notes + [f"card → {db.get('cards', c['id'])['state']}"])
         return True
+
+    def note(self, text):
+        self.notes.append(text)
+        self.log("  " + text)
 
     def run_until_idle(self, max_ticks=200, after_tick=None):
         for _ in range(max_ticks):
@@ -52,7 +66,7 @@ class Dispatcher:
         db, gw = self.db, self.gw
         if c["role"] in LIBRARIAN_ROLES and c["phase"] == "execute":
             d, ids = memory.librarian_preflight(gw, db, c)
-            self.log(f"  librarian: {d['decision']} (notes: {ids})")
+            self.note(f"librarian: {d['decision']} (notes: {', '.join(ids) or 'none'})")
             if d["decision"] == "answered":
                 try:
                     notes = [memory.note_view(db, i) for i in d["answer_note_ids"]]
@@ -74,7 +88,7 @@ class Dispatcher:
             t = calls.triage(gw, c, tools, rcps if allow_no else [], MAX_TURNS.get(c["role"], 8), allow_no=allow_no)
         except LLMFailure:
             t = {"fits_one_session": "unsure", "recipe_id": "none", "missing_info": None}
-        self.log(f"  triage: {t}")
+        self.note(f"triage: fits={t['fits_one_session']} recipe={t['recipe_id']} missing_info={t['missing_info']}")
         if t["missing_info"] and c["created_by"] != "planner":
             ask(db, c, t["missing_info"])
             transition(db, c["id"], "missing_info")
@@ -94,11 +108,11 @@ class Dispatcher:
             if p["recipe_id"] in recipes.RECIPES:
                 r = recipes.RECIPES[p["recipe_id"]]
                 params = calls.plan_fill(self.gw, parent, recipes.for_prompt(r))
-                self.log(f"  plan_fill {r['id']}: {params}")
+                self.note(f"plan_fill {r['id']}: {params}")
                 self.instantiate(parent, r, params)
             else:
                 subs = calls.plan_generate(self.gw, parent)["subtasks"]
-                self.log(f"  plan_generate: {[s['title'] for s in subs]}")
+                self.note(f"plan_generate: {[s['title'] for s in subs]}")
                 ids = []
                 for s in subs:
                     ch = board.create_card(db, s["title"], s["goal"], role=s["role"], done_when=s["done_when"],
@@ -107,7 +121,7 @@ class Dispatcher:
                     ids.append(ch["id"])
             transition(db, p["id"], "planned")
         except (LLMFailure, board.BoardError) as e:
-            self.log(f"  planner failed: {e}")
+            self.note(f"planner failed: {e}")
             transition(db, p["id"], "plan_failed", payload={"error": str(e)[:300]})
             if db.get("cards", parent["id"])["state"] == "waiting":
                 transition(db, parent["id"], "plan_fallback")
@@ -154,7 +168,7 @@ class Dispatcher:
                 for sib in db.q("SELECT id FROM cards WHERE parent_id=? AND recipe_step=?", parent["id"], d["key"]):
                     for nid in new_ids:
                         db.insert("card_deps", card_id=sib["id"], depends_on=nid)
-            self.log(f"  fan-out: {items}")
+            self.note(f"fan-out: {items}")
 
     # ----- worker (§5.7) -----
     def inputs(self, c):
@@ -189,12 +203,14 @@ class Dispatcher:
                "inputs": [i for i in self.inputs(c) if not i.startswith("workdir:")],
                "comments": board.comments(db, c["id"])}
 
-        def on_step(k, a, r):
+        def on_step(k, a, r, ms):
             board.renew(db, c["id"])
+            trace.tool_call(db, self.session["id"], k, a, r, ms)
             self.log(f"    {k}. {a['action']} {str({x: y for x, y in a.items() if x != 'action'})[:100]}")
 
         a, steps = run_worker(self.gw_for(c), ctx, env, allowed_terminals=allowed, on_step=on_step)
-        self.log(f"  → {a['action']}: {str(a)[:200]}")
+        self.session["turns"] = len(steps)
+        self.note(f"terminal: {a['action']} {str({k: v for k, v in a.items() if k != 'action'})[:300]}")
         self.apply(c, a, env)
 
     def apply(self, c, a, env):
@@ -259,7 +275,7 @@ class Dispatcher:
         for a in res.get("artifacts", [])[:2]:
             text += f"\n\nFile {a}:\n" + arts.read(a, 0, 2000)
         ok, fb = verifier.verify(self.gw, c["title"], res, c["done_when"] or [], text, workdir)
-        self.log(f"  verify: {'pass' if ok else fb}")
+        self.note(f"verify: {'pass' if ok else fb}")
         if ok:
             transition(db, c["id"], "verify_pass")
             memory.enqueue_facts(db, res.get("facts"), c["id"])

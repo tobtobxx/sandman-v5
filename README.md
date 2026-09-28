@@ -24,6 +24,8 @@ sandman/
   memory.py       notes/claims, fact queue, consolidator (rubric + merge), librarian retrieval
   recipes.py      two seed recipes
   tools.py        web (live or fake corpus), artifacts, files, run
+  trace.py        sessions + tool calls; tags every LLM call with its session/card/topic
+  web.py          read-only web UI over the whole runtime (python -m sandman web)
 bench/
   cases/*.py      173 tasks: core suite (isolated calls) + harness suite (harness.py:
                   long pages, files, memory, follow-ups, full dispatcher pipelines)
@@ -53,6 +55,7 @@ python -m sandman --fake-web bench chat   # or live web without --fake-web
 python -m sandman card "Gardena price" "Find the price of the GARDENA Micro-Drip starter set" \
     --done-when "states the price in CHF"
 python -m sandman board
+python -m sandman web --port 8080          # inspect everything in the browser (read-only)
 ```
 
 `bench/results/` holds the reports of the runs discussed in `docs/BENCH.md`.

@@ -6,6 +6,7 @@
   show CARD            card contract, events, comments, result
   consolidate          run the memory consolidator now
   notes                list memory notes and claims
+  web [--port 8080]    read-only web UI over everything in --home
 """
 import argparse
 import json
@@ -54,7 +55,13 @@ def main():
     s.add_argument("card")
     sub.add_parser("consolidate")
     sub.add_parser("notes")
+    w = sub.add_parser("web")
+    w.add_argument("--port", type=int, default=8080)
+    w.add_argument("--host", default="127.0.0.1")
     a = p.parse_args()
+    if a.cmd == "web":
+        from .web import serve
+        return serve(a.home, a.host, a.port)
     db, gw, disp, log = setup(a)
 
     if a.cmd == "chat":

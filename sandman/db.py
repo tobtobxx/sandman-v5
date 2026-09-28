@@ -31,12 +31,26 @@ CREATE TABLE IF NOT EXISTS facts (id TEXT PRIMARY KEY, card_id TEXT, subject TEX
     volatility TEXT, status TEXT DEFAULT 'pending', decision TEXT, decision_reason TEXT, created_at TEXT);
 CREATE TABLE IF NOT EXISTS review_items (id TEXT PRIMARY KEY, kind TEXT, payload JSON, status TEXT);
 CREATE TABLE IF NOT EXISTS llm_calls (id TEXT PRIMARY KEY, call_type TEXT, model TEXT, input JSON, raw TEXT,
-    parsed JSON, ok INTEGER, error TEXT, tokens_in INTEGER, tokens_out INTEGER, ms INTEGER, at TEXT);
+    parsed JSON, ok INTEGER, error TEXT, tokens_in INTEGER, tokens_out INTEGER, ms INTEGER, at TEXT,
+    session_id TEXT, card_id TEXT, topic_id TEXT, provider TEXT, cost REAL, attempt INTEGER, temperature REAL,
+    max_tokens INTEGER, schema JSON);
+CREATE TABLE IF NOT EXISTS sessions (id TEXT PRIMARY KEY, card_id TEXT, topic_id TEXT, type TEXT, model TEXT,
+    info JSON, turns INTEGER, outcome TEXT, started_at TEXT, ended_at TEXT);
+CREATE TABLE IF NOT EXISTS tool_calls (id TEXT PRIMARY KEY, session_id TEXT, turn INTEGER, tool TEXT, args JSON,
+    result TEXT, ok INTEGER, ms INTEGER, at TEXT, after_call TEXT);
+CREATE INDEX IF NOT EXISTS llm_calls_session ON llm_calls(session_id);
+CREATE INDEX IF NOT EXISTS llm_calls_card ON llm_calls(card_id);
+CREATE INDEX IF NOT EXISTS sessions_card ON sessions(card_id);
+CREATE INDEX IF NOT EXISTS tool_calls_session ON tool_calls(session_id);
 CREATE VIRTUAL TABLE IF NOT EXISTS notes_fts USING fts5(note_id UNINDEXED, title, aliases, one_liner, claims);
 """
 
 JSON_COLS = {"done_when", "constraints", "inputs", "result", "options", "aliases", "source", "payload",
-             "recipe_params", "parsed", "input"}
+             "recipe_params", "parsed", "input", "schema", "info", "args"}
+# columns added after the first prototype; added to old databases on open
+MIGRATIONS = [("llm_calls", c) for c in ("session_id TEXT", "card_id TEXT", "topic_id TEXT", "provider TEXT",
+                                         "cost REAL", "attempt INTEGER", "temperature REAL", "max_tokens INTEGER",
+                                         "schema JSON")] + [("tool_calls", "after_call TEXT")]
 
 
 def now():
@@ -53,6 +67,11 @@ class DB:
         self.c = sqlite3.connect(path, check_same_thread=False, isolation_level=None)
         self.c.row_factory = sqlite3.Row
         self.c.execute("PRAGMA journal_mode=WAL")
+        for table, col in MIGRATIONS:
+            try:
+                self.c.execute(f"ALTER TABLE {table} ADD COLUMN {col}")
+            except sqlite3.OperationalError:
+                pass  # exists already, or the table is new
         self.c.executescript(SCHEMA)
 
     def q(self, sql, *args):
@@ -92,9 +111,12 @@ class DB:
 
     def log_call(self, rec):
         self.insert("llm_calls", id=rec["id"], call_type=rec["call_type"], model=rec["model"],
-                    input={"system": rec["system"], "user": rec["user"]}, raw=rec["raw"], parsed=rec["parsed"],
+                    input={"system": rec["system"], "system_hint": rec.get("system_hint", ""), "user": rec["user"]}, raw=rec["raw"], parsed=rec["parsed"],
                     ok=int(rec["ok"]), error=rec["error"], tokens_in=rec["tokens_in"], tokens_out=rec["tokens_out"],
-                    ms=rec["ms"], at=rec["at"])
+                    ms=rec["ms"], at=rec["at"], session_id=rec.get("session_id"), card_id=rec.get("card_id"),
+                    topic_id=rec.get("topic_id"), provider=rec.get("provider"), cost=rec.get("cost"),
+                    attempt=rec.get("attempt"), temperature=rec.get("temperature"),
+                    max_tokens=rec.get("max_tokens"), schema=rec.get("schema"))
 
 
 class _Tx:

@@ -12,6 +12,8 @@ import uuid
 import jsonschema
 import requests
 
+from . import trace
+
 
 JSON_HINT = "\n\nAnswer with compact JSON. Use \\n for line breaks inside strings."
 
@@ -102,12 +104,18 @@ class Gateway:
             except LLMFailure as e:
                 err = str(e)
             self.calls += 1
+            call_id = "cal_" + uuid.uuid4().hex[:12]
+            ctx = trace.current.get()
+            if ctx is not None:
+                ctx["last_call"] = call_id  # tool calls after this point were chosen by this call
             if self.log:
-                self.log({"id": "cal_" + uuid.uuid4().hex[:12], "call_type": call_type, "model": self.model,
+                self.log({"id": call_id, "call_type": call_type, "model": self.model,
                           "system": system, "user": user, "raw": raw, "parsed": parsed if not err else None,
                           "ok": err is None, "error": err, "attempt": attempt, "provider": provider,
                           "tokens_in": usage.get("prompt_tokens"), "tokens_out": usage.get("completion_tokens"),
                           "cost": usage.get("cost"), "ms": int((time.time() - t0) * 1000),
+                          "temperature": temperature if attempt == 0 else 0.0, "max_tokens": max_tokens,
+                          "schema": schema, "system_hint": hint, **(trace.current.get() or {}),
                           "at": time.strftime("%Y-%m-%dT%H:%M:%S"), **(meta or {})})
             if err is None:
                 return parsed

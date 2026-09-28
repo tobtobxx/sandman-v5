@@ -4,7 +4,7 @@ import datetime
 import re
 import time
 
-from . import board, calls, memory
+from . import board, calls, memory, trace
 from .db import new_id, now
 from .llm import LLMFailure
 
@@ -222,7 +222,10 @@ class Conversation:
             return
         if re.match(r"^(→|->)\s*[\w-]+$", text):
             return self.correct(re.sub(r"^(→|->)\s*", "", text))
-        topic, body, routed_by, conf, prov = self.route(text, selected_slug)
+        with trace.session(self.db, "router", model=self.gw.model, text=text[:500]) as s:
+            topic, body, routed_by, conf, prov = self.route(text, selected_slug)
+            s["outcome"] = f"[{topic['slug']}] by {routed_by}, confidence {conf}{', provisional' if prov else ''}"
+        self.db.update("sessions", s["id"], topic_id=topic["id"])
         mid = new_id("msg")
         self.db.insert("messages", id=mid, topic_id=topic["id"], binding=self.binding, direction="in", text=body,
                        routed_by=routed_by, route_confidence=conf, provisional=int(bool(prov)), created_at=now())
@@ -267,6 +270,10 @@ class Conversation:
 
     # ----- front desk (§6.5) -----
     def frontdesk(self, topic, text, provisional=False):
+        with trace.session(self.db, "frontdesk", topic_id=topic["id"], model=self.gw.model, text=text[:500]) as s:
+            self._frontdesk(topic, text, provisional, s)
+
+    def _frontdesk(self, topic, text, provisional, s):
         db = self.db
         cards = db.q("SELECT * FROM cards WHERE origin_topic_id=? AND depth=0 AND kind='task' "
                      "ORDER BY created_at DESC LIMIT 8", topic["id"])
@@ -290,6 +297,9 @@ class Conversation:
                 post(db, topic["id"], "reply", "Sorry, I could not process that. Please try again.")
                 return
             t = a["action"]
+            s["turns"] = k
+            if t in ("reply", "no_reply"):
+                s["outcome"] = t + (f": {a['text'][:200]}" if t == "reply" else "")
             if t == "reply":
                 body = a["text"]
                 if provisional:
@@ -305,6 +315,7 @@ class Conversation:
                     post(db, topic["id"], "ack", " ".join(acks))
                 return
             r = self.frontdesk_tool(topic, a)
+            trace.tool_call(db, s["id"], k, a, r)
             if t == "answer_question":
                 ctx["questions"] = []  # one answer per turn; the desk otherwise "answers" the others too
             acted.append((a, r))
@@ -346,6 +357,11 @@ class Conversation:
         return "Error: unknown tool."
 
     def after_turn(self, topic, text):
+        with trace.session(self.db, "summarize", topic_id=topic["id"], model=self.gw.model) as s:
+            self._after_turn(topic, text)
+            s["outcome"] = "summary and owner facts updated"
+
+    def _after_turn(self, topic, text):
         """Rolling summary + owner facts (§6.5, §7.4). Batched per turn in the prototype."""
         db = self.db
         topic = db.get("topics", topic["id"])
@@ -367,6 +383,13 @@ class Conversation:
     # ----- commands (§6.10, no LLM) -----
     def command(self, text):
         db = self.db
+        m = re.fullmatch(r"/new\s+([^\n]+)", text)
+        if m:  # a bare /new only opens the topic; the next messages stick to it
+            tp = self.new_topic(m.group(1).strip())
+            post(db, tp["id"], "reply", f"New topic: {tp['title']}")
+            db.insert("messages", id=new_id("msg"), topic_id=tp["id"], binding=self.binding, direction="in",
+                      text=text, routed_by="command", route_confidence="high", created_at=now())
+            return True
         if text == "/topics":
             post(db, None, "reply", "\n".join(f"{t['slug']} — {t['title']} ({t['status']})"
                                               for t in db.q("SELECT * FROM topics ORDER BY last_activity_at DESC"))

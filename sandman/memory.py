@@ -3,7 +3,7 @@ consolidator, and a librarian that pushes memory into sessions."""
 import datetime
 import re
 
-from . import calls
+from . import calls, trace
 from .db import new_id, now
 from .llm import LLMFailure
 
@@ -161,6 +161,13 @@ def enqueue_facts(db, facts, card_id=None, source_type="card"):
 # ---------- consolidator (§7.5) ----------
 
 def consolidate(gw, db, limit=50, log=print):
+    with trace.session(db, "consolidator", model=getattr(gw, "model", None)) as s:
+        n = _consolidate(gw, db, limit, log)
+        s["outcome"], s["turns"] = f"{n} facts processed", n
+
+
+def _consolidate(gw, db, limit, log):
+    count = 0
     for f in db.q("SELECT * FROM facts WHERE status='pending' ORDER BY created_at LIMIT ?", limit):
         try:
             decision, reason = _consolidate_one(gw, db, f)
@@ -168,6 +175,7 @@ def consolidate(gw, db, limit=50, log=print):
             decision, reason = "error", str(e)[:200]
             db.update("facts", f["id"], decision=decision, decision_reason=reason)
             continue
+        count += 1
         status = {"discard": "discarded", "contradicts": "review"}.get(decision, "merged")
         db.update("facts", f["id"], status=status, decision=decision, decision_reason=reason)
         log(f"  fact {f['id']} [{f['subject']}] {f['text'][:60]!r} → {decision} ({reason})")
@@ -180,6 +188,7 @@ def consolidate(gw, db, limit=50, log=print):
                 pass
         db.update("notes", n["id"], dirty=0)
         reindex(db, n["id"])
+    return count
 
 
 def _retracted(db, f):
