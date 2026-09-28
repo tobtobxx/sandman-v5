@@ -3,10 +3,9 @@ from bench.checks import contains, custom, eq, judge, one_of
 from sandman import calls, recipes
 
 RESEARCH_TOOLS = [("web_search", "search the web"), ("web_fetch", "read a web page"),
-                  ("open_note", "read a memory note"), ("read_artifact", "read a saved file"),
+                  ("read_artifact", "read a saved file"),
                   ("write_artifact", "save a file")]
-WRITE_TOOLS = [("read_artifact", "read a saved file"), ("write_artifact", "save a file"),
-               ("open_note", "read a memory note")]
+WRITE_TOOLS = [("read_artifact", "read a saved file"), ("write_artifact", "save a file")]
 RECIPES = recipes.shortlist("")
 
 

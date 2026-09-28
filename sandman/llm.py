@@ -38,11 +38,14 @@ class Gateway:
             "messages": messages,
             "temperature": temperature,
             "max_tokens": max_tokens,
-            "response_format": {"type": "json_schema",
-                                "json_schema": {"name": "out", "strict": True, "schema": schema}},
         }
+        if schema is not None:
+            body["response_format"] = {"type": "json_schema",
+                                       "json_schema": {"name": "out", "strict": True, "schema": schema}}
         if "openrouter.ai" in self.base_url:
-            body["provider"] = {"require_parameters": True}
+            body["provider"] = {"require_parameters": schema is not None}
+            if os.environ.get("SANDMAN_PROVIDERS"):  # e.g. "Darkbloom,AkashML"
+                body["provider"]["order"] = os.environ["SANDMAN_PROVIDERS"].split(",")
             body["reasoning"] = {"enabled": bool(self.reasoning)}
         last = None
         for attempt in range(4):  # transport retries only
@@ -67,10 +70,13 @@ class Gateway:
 
     def call(self, call_type, system, user, schema, temperature=0.0, check=None, meta=None, max_tokens=1500):
         """Returns the parsed object. `check` is an optional extra validator
-        (raises ValueError) for rules JSON schema cannot express."""
+        (raises ValueError) for rules JSON schema cannot express.
+        schema=None is a plain-text call (used for long content such as files,
+        which small models write badly inside JSON strings); returns a str."""
         # Without this hint, several providers' grammar engines let Qwen-class
         # models emit whitespace forever after "{" (see docs/BENCH.md).
-        messages = [{"role": "system", "content": system + JSON_HINT}, {"role": "user", "content": user}]
+        hint = JSON_HINT if schema is not None else ""
+        messages = [{"role": "system", "content": system + hint}, {"role": "user", "content": user}]
         err = None
         for attempt in range(2):  # design: retry once, lower temperature
             t0 = time.time()
@@ -83,8 +89,11 @@ class Gateway:
                 usage = d.get("usage", {})
                 provider = d.get("provider")
                 self.cost += usage.get("cost", 0) or 0
-                parsed = _truncate(json.loads(_strip_fences(raw)), schema)
-                jsonschema.validate(parsed, schema)
+                if schema is None:
+                    parsed = _strip_fences(raw)
+                else:
+                    parsed = _truncate(json.loads(_strip_fences(raw)), schema)
+                    jsonschema.validate(parsed, schema)
                 if check:
                     check(parsed)
                 err = None

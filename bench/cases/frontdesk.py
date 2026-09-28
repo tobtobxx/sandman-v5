@@ -8,7 +8,7 @@ PROFILE = "- The owner lives in Zurich.\n- The owner prefers low-maintenance sol
 
 def ctx(text, **kw):
     base = {"owner": "Alex", "now": NOW, "profile": PROFILE, "topic_title": "(new topic)", "topic_summary": "",
-            "history": [], "cards": [], "questions": [], "catalog": [], "text": text}
+            "history": [], "cards": [], "questions": [], "memory": [], "text": text}
     base.update(kw)
     return base
 
@@ -31,8 +31,8 @@ CASES = [
     step(4, ctx("remind me friday to file the tax extension", topic_title="Tax return 2026"),
          [eq("action", "remind"), contains("when", ("fri", "2026-10-02", "oct 2", "2 oct"))]),
     step(5, ctx("how is the irrigation research going?", topic_title="Garden irrigation",
-                cards=["crd_a1 — Evaluate drip irrigation for raised beds — running"]),
-         [one_of("action", ["board_status", "reply"]), not_card]),
+                cards=[{"id": "crd_a1", "title": "Evaluate drip irrigation for raised beds", "state": "running"}]),
+         [eq("action", "reply"), not_card]),
     step(6, ctx("under 200 is fine", topic_title="Garden irrigation",
                 questions=[{"id": "qst_7", "text": "Q1 (card crd_a1): Which budget should I assume for the drip kit? "
                                                    "Options: under 100 / under 200"}]),
@@ -42,28 +42,26 @@ CASES = [
          [eq("action", "create_card"), eq("role", "write")]),
     step(8, ctx("what's 15% of 240?"), [eq("action", "reply"), contains("text", "36")]),
     step(9, ctx("how big are my raised beds again?", topic_title="Garden irrigation",
-                catalog=[{"id": "not_beds", "title": "Owner's raised beds",
-                          "one_liner": "3 raised beds, 40 m² in total, south-facing"}]),
-         [custom("open_note(not_beds) or reply with 40",
-                 lambda o, c: (o["action"] == "open_note" and o["note_id"] == "not_beds")
-                 or (o["action"] == "reply" and "40" in o["text"]))]),
+                memory=[{"id": "not_beds", "title": "Owner's raised beds", "one_liner": "Size of the owner's beds",
+                         "claims": [{"text": "3 raised beds, 40 m² in total, south-facing", "observed_at": "2026-09-01"}]}]),
+         [eq("action", "reply"), contains("text", "40")]),
     step(10, ctx("the test in my budget script at ~/code/budget fails since yesterday, can you fix it?"),
          [eq("action", "create_card"), eq("role", "code")]),
     step(11, ctx("compare the drip kits you can buy in Switzerland and recommend one"),
          [eq("action", "reply"), lacks("text", "crd_")],
-         steps=[("create_card(title='Compare drip kits in Switzerland', ...)", "Created card crd_b7.")], k=2),
+         steps=[("create_card(title='Compare drip kits in Switzerland', ...)", "Created card crd_b7. Handle anything else the message asks for, then reply to Alex.")], k=2),
     step(12, ctx("compare three health insurers for 2027 and tell me which one is cheapest for me"),
          [eq("action", "create_card"), one_of("role", ["research", "synthesize"])]),
     step(13, ctx("what did you find out?", topic_title="Garden irrigation",
-                 cards=["crd_a1 — Evaluate drip irrigation for raised beds — done"]),
-         [one_of("action", ["board_status"]), eq("card_id", "crd_a1")]),
-    step(14, ctx("what did you find out?", topic_title="Garden irrigation",
-                 cards=["crd_a1 — Evaluate drip irrigation for raised beds — done"]),
-         [eq("action", "reply"), contains("text", "gardena")],
-         steps=[("board_status(card_id='crd_a1')", "crd_a1 — Evaluate drip irrigation for raised beds — done — "
-                                                   "Gardena Micro-Drip (CHF 89) covers 15 m²; you need 3 sets for "
-                                                   "40 m². Manual watering is cheaper but takes 20 min a day.")],
-         k=2),
+                 cards=[{"id": "crd_a1", "title": "Evaluate drip irrigation for raised beds", "state": "done",
+                         "result": "GARDENA Micro-Drip (CHF 89) covers 15 m²; you need 3 sets for 40 m². Manual "
+                                   "watering is cheaper but takes 20 min a day."}]),
+         [eq("action", "reply"), contains("text", "gardena")]),
+    step(14, ctx("so which kit should I buy, and how many?", topic_title="Garden irrigation",
+                 cards=[{"id": "crd_a1", "title": "Evaluate drip irrigation for raised beds", "state": "done",
+                         "result": "GARDENA Micro-Drip (CHF 89) covers 15 m²; you need 3 sets for 40 m². Manual "
+                                   "watering is cheaper but takes 20 min a day."}]),
+         [eq("action", "reply"), contains("text", "gardena", ("3", "three")), not_card]),
 ]
 
 # Episodes run the real Conversation.frontdesk on a scratch DB (see bench/runners.py).

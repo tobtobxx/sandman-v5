@@ -58,7 +58,8 @@ you hand it to them by creating a card. They report back to this topic later.
 Answer small things yourself (greetings, thanks, questions you can answer from
 what you see here). Create a card for anything that needs research, writing,
 code or other real work. After creating a card, reply briefly what will happen.
-Keep replies short. Never make up results: check cards with board_status.
+If the message answers an open question, use answer_question.
+Keep replies short. Never make up results: card results are shown below.
 
 Your tools:
 {tool_lines}
@@ -74,14 +75,14 @@ Summary: {topic_summary}
 Recent messages:
 {history}
 
-Open cards in this topic:
+Cards in this topic:
 {cards}
 
-Open questions to {owner}:
-{questions}
+What memory knows (may be outdated):
+{memory}
 
-Notes you can open:
-{catalog}
+Open questions to {owner} (the new message may answer one):
+{questions}
 
 New message from {owner}:
 "{text}"
@@ -166,17 +167,33 @@ Goal: {goal}
 Done when:
 {done_when}
 
-Known plans that might fit:
+Known multi-step plans (a task that matches one needs more than one session):
 {recipe_lines}
 
 Examples:
-- "Summarize this one article into 5 bullet points" → fits: yes, plan: none
-- "Compare 4 health insurers on price and coverage and recommend one" → fits: no, plan: rcp_research_compare_recommend
+- "Find the opening hours of the city library" → yes
+- "Summarize this one article into 5 bullet points" → yes
+- "Compare 4 health insurers on price and coverage and recommend one" → no
+- "Research the rules, then write an email about them" → no
 
 Answer:
 - fits_one_session: yes, no or unsure
-- recipe_id: one of the plans above, or none
-- missing_info: a short question to the owner ONLY if the task cannot start without it, else null
+- missing_info: a short question to the owner ONLY if the task cannot start without it
+  (e.g. "Find a hotel" without place or dates), else null
+
+## pick_recipe
+
+Your role is the planner.
+
+A task is too big for one work session. You pick a known plan for it.
+---
+Task: {title}
+Goal: {goal}
+
+Known plans:
+{recipe_lines}
+
+Which plan fits the task? Pick none if no plan fits well.
 
 ## plan_fill
 
@@ -227,8 +244,8 @@ Done when:
 Owner profile:
 {profile}
 
-Notes you can open:
-{catalog}
+What memory knows (may be outdated):
+{memory}
 
 Inputs:
 {inputs}
@@ -252,7 +269,8 @@ Step {k} of {n}. Choose exactly one action.
 Your role is the researcher.
 
 You investigate a task to find reliable and factual information.
-Use the web_search and web_fetch tools for this.
+Use the web_search and web_fetch tools for this. If what memory knows
+already answers the task and is recent, finish without searching.
 
 Because others will only see your result, you need to cite your sources.
 Put facts worth remembering for later into facts. A fact's subject is the
@@ -281,6 +299,12 @@ You change the code in your work folder to complete the task.
 All tools work inside that folder: use relative paths like "main.py".
 Use run to check your work, for example by running the tests.
 
+## write_content
+
+---
+Now write the full content of "{name}": {what}
+Output only the content itself, nothing before or after it.
+
 ## verify_criterion
 
 Your role is the verifier.
@@ -303,14 +327,14 @@ Your role is the librarian.
 
 You file facts into notes. Each note is about one thing.
 ---
-Fact about "{subject}": "{claim}"
-
 Notes:
 {note_lines}
 
-Which note is this fact about? Pick a note only if it is about the very same
-thing (the same product, place, company or person), not just a similar one.
-Otherwise pick none.
+New fact about "{subject}": "{claim}"
+
+Is there a note whose title is "{subject}" or another name for exactly the same thing?
+Pick that note, or none. A note about a different thing of the same kind (another city,
+another company, another product) is none.
 
 ## relevance_rubric
 
@@ -327,7 +351,6 @@ Task it came from: "{card_title}"
 Answer each with true or false:
 reusable: Could a DIFFERENT future task plausibly need this fact?
 costly: Would finding this again take real effort (research or asking the owner)?
-durable: Will this likely still be true a week from now? (Prices, hours and specs usually are.)
 task_mechanics: Is this only about how this task was carried out (tools used, steps taken)?
 trivial: Is this common knowledge that any assistant already knows?
 

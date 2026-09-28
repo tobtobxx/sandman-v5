@@ -42,3 +42,46 @@ PAGES = [
      "text": "Drip irrigation uses 30-50% less water than hand watering, since water goes straight to the roots. "
              "Manual watering of 40 m² takes about 20 minutes a day in summer. Drip kits cost CHF 70-150 upfront."},
 ]
+
+# A long page: the relevant rule is in section 14, far beyond the first 3000
+# characters a worker sees of a tool result.
+_SECTIONS = [
+    ("Scope", "These house rules apply to all tenants of rental apartments managed under the Zurich standard "
+              "tenancy agreement. They complement the tenancy contract and the Swiss Code of Obligations."),
+    ("Quiet hours", "Quiet hours are from 22:00 to 07:00 and from 12:00 to 13:00. On Sundays and public holidays "
+                    "noisy work is not permitted at all. Music must be kept at room volume."),
+    ("Laundry room", "The laundry room is used according to the posted schedule. Clean the machines and the filter "
+                     "after use. Drying clothes in the stairwell is not allowed."),
+    ("Stairwell", "Keep the stairwell free of shoes, bicycles and prams. Fire doors must stay closed."),
+    ("Waste", "Household waste goes into official Zurich bags (Züri-Sack). Paper and cardboard are collected "
+              "every second Wednesday. Glass and metal go to the public collection points."),
+    ("Pets", "Small pets are allowed. Dogs and cats need the written consent of the landlord."),
+    ("Heating and ventilation", "Ventilate briefly and fully several times a day instead of leaving windows "
+                                "tilted. The heating season runs from October to April."),
+    ("Cellar and attic", "Storage compartments must not contain flammable liquids. Keep passageways free."),
+    ("Bicycles", "Bicycles are parked in the bicycle room only. E-bike batteries must not be charged there."),
+    ("Keys", "Lost keys must be reported to the management immediately. Copies are made by the landlord only."),
+    ("Barbecues", "Charcoal barbecues are not allowed on balconies. Electric and gas grills are allowed if they "
+                  "do not disturb the neighbours."),
+    ("Smoking", "Smoking is not allowed in the stairwell, lift, laundry room and cellar."),
+    ("Repairs", "Tenants report damage promptly. Small repairs up to CHF 150 are paid by the tenant."),
+    ("Balconies and plants", "Plant boxes must be mounted on the inside of the railing. Watering systems, "
+                             "including drip irrigation, are allowed on balconies if no water drips onto lower "
+                             "balconies or the facade. Installations that are fixed to the building (drilling, "
+                             "a new water connection) require the written consent of the landlord."),
+    ("Parking", "Visitor parking spaces may be used for at most 24 hours."),
+    ("Moving out", "The apartment is handed over clean, with all keys, on the agreed date."),
+]
+_LONG = "\n\n".join(f"§{i + 1} {t}. " + (b + " ") * 3 for i, (t, b) in enumerate(_SECTIONS))
+
+PAGES += [
+    {"url": "https://www.hev-zuerich.ch/hausordnung", "title": "Zurich standard house rules (Hausordnung) – full text",
+     "text": _LONG},
+    {"url": "https://www.mieterverband.ch/balkon", "title": "Mieterverband: What may tenants do on the balcony?",
+     "text": "Tenants may use their balcony freely within the house rules. Check your Hausordnung for rules on "
+             "plants, barbecues and watering."},
+    {"url": "https://www.coop.ch/bau-hobby/blumat-tropfsystem",
+     "title": "Blumat drip system for balconies without a tap",
+     "text": "The Blumat Easy set waters up to 12 plants from any bucket or water tank using clay sensors. "
+             "No tap, no electricity and no app needed. Price: CHF 45. Covers about 2 m² of plant boxes."},
+]

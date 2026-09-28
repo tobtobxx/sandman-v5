@@ -59,13 +59,15 @@ def run_case(case, rep, args, judge_gw):
             checks.append({"ok": ok, "check": desc})
     shutil.rmtree(tmp, ignore_errors=True)
     passed = out is not None and all(c["ok"] for c in checks)
-    return {"id": case["id"], "call": case["call"], "group": case["group"], "rep": rep, "pass": passed,
+    return {"id": case["id"], "call": case["call"], "group": case["group"], "suite": case.get("suite", "core"),
+            "rep": rep, "pass": passed,
             "error": error, "checks": checks, "judge_reasons": ctx.get("judge_reasons", []),
             "output": out, "wall_s": round(wall, 2), "llm_calls": len(recs),
             "invalid_attempts": sum(1 for r in recs if not r["ok"]),
             "tokens_in": sum(r["tokens_in"] or 0 for r in recs), "tokens_out": sum(r["tokens_out"] or 0 for r in recs),
             "ms": [r["ms"] for r in recs], "cost": sum(r["cost"] or 0 for r in recs),
-            "raw_errors": [r["error"] for r in recs if not r["ok"]][:3]}
+            "raw_errors": [r["error"] for r in recs if not r["ok"]][:3],
+            "providers": sorted({r.get("provider") or "?" for r in recs})}
 
 
 def summarize(results, key):
@@ -84,14 +86,27 @@ def summarize(results, key):
                       "retry_rate": sum(r["invalid_attempts"] for r in rs) / max(1, sum(r["llm_calls"] for r in rs)),
                       "median_ms": int(statistics.median(ms)) if ms else 0,
                       "tok_out_per_call": int(sum(r["tokens_out"] for r in rs) / max(1, sum(r["llm_calls"] for r in rs))),
-                      "cost": sum(r["cost"] for r in rs)})
+                      "calls_per_run": sum(r["llm_calls"] for r in rs) / len(rs),
+                      "cost": sum(r["cost"] for r in rs), "cost_per_run": sum(r["cost"] for r in rs) / len(rs)})
     return sorted(table, key=lambda x: x[key])
 
 
 def md_table(rows, key):
-    h = f"| {key} | cases | pass | flaky | invalid | retry | median ms | tok out/call |\n|---|---|---|---|---|---|---|---|\n"
+    h = (f"| {key} | cases | pass | flaky | invalid | retry | median ms | calls/run | tok out/call | cost | "
+         f"cost/run |\n|---|---|---|---|---|---|---|---|---|---|---|\n")
     return h + "\n".join(f"| {r[key]} | {r['cases']} | {r['pass_rate']:.0%} | {r['flaky_cases']} | {r['invalid_runs']} "
-                         f"| {r['retry_rate']:.0%} | {r['median_ms']} | {r['tok_out_per_call']} |" for r in rows)
+                         f"| {r['retry_rate']:.0%} | {r['median_ms']} | {r['calls_per_run']:.1f} | "
+                         f"{r['tok_out_per_call']} | ${r['cost']:.4f} | ${r['cost_per_run']:.5f} |" for r in rows)
+
+
+def key_usage(gw):
+    """OpenRouter's own usage counter for the key, to cross-check the summed costs."""
+    try:
+        import requests
+        r = requests.get(f"{gw.base_url}/key", headers={"Authorization": f"Bearer {gw.api_key}"}, timeout=20)
+        return r.json()["data"]["usage"]
+    except Exception:
+        return None
 
 
 def main():
@@ -108,15 +123,17 @@ def main():
     cases = load_cases()
     if args.only:
         sel = args.only.split(",")
-        cases = [c for c in cases if any(c["id"].startswith(s) or c["call"] == s or c["group"] == s for s in sel)]
+        cases = [c for c in cases if any(c["id"].startswith(s) or c["call"] == s or c["group"] == s
+                                         or c.get("suite", "core") == s for s in sel)]
     judge_gw = Gateway(model=args.judge_model, reasoning=True)
     jobs = [(c, r) for r in range(args.repeat) for c in cases]
     print(f"{len(cases)} cases × {args.repeat} = {len(jobs)} runs on {args.model} "
           f"(reasoning {'on' if args.reasoning else 'off'}), judge {args.judge_model}")
     t0 = time.time()
+    usage0 = key_usage(judge_gw)
     results = []
     os.makedirs(os.path.join(HERE, "results"), exist_ok=True)
-    partial = open(os.path.join(HERE, "results", "partial.jsonl"), "w")
+    partial = open(os.path.join(tempfile.gettempdir(), "sandman_bench_partial.jsonl"), "w")
     with ThreadPoolExecutor(args.workers) as ex:
         futs = [ex.submit(run_case, c, rep, args, judge_gw) for c, rep in jobs]
         for f in as_completed(futs):
@@ -129,25 +146,39 @@ def main():
             print(f"  {mark} {r['id']}#{r['rep']} ({r['wall_s']}s){why[:160]}", flush=True)
 
     by_call, by_group = summarize(results, "call"), summarize(results, "group")
+    by_suite = summarize(results, "suite")
     total = sum(r["pass"] for r in results) / len(results)
     cost = sum(r["cost"] for r in results)
-    header = (f"# Bench: {args.model} (reasoning {'on' if args.reasoning else 'off'})\n\n"
+    time.sleep(5)  # the key counter lags a little
+    usage1 = key_usage(judge_gw)
+    delta = f" · key usage Δ ${usage1 - usage0:.4f}" if usage0 is not None and usage1 is not None else ""
+    header = (f"# Bench: {args.model} (reasoning {'on' if args.reasoning else 'off'}){' · ' + args.tag if args.tag else ''}\n\n"
               f"{time.strftime('%Y-%m-%d %H:%M')} · {len(cases)} cases × {args.repeat} · overall pass "
-              f"{total:.0%} · model cost ${cost:.4f} · judge cost ${judge_gw.cost:.4f} · {time.time() - t0:.0f}s\n")
+              f"{total:.1%} · {time.time() - t0:.0f}s\n\n"
+              f"Cost (sum of usage.cost of every response, retries included): model ${cost:.4f} "
+              f"(${cost / len(results):.5f} per case run, {sum(r['llm_calls'] for r in results)} calls) · "
+              f"judge ${judge_gw.cost:.4f} · total ${cost + judge_gw.cost:.4f}{delta}\n")
     fails = [r for r in results if not r["pass"]]
     fail_md = "\n".join(
         f"- **{r['id']}**#{r['rep']}: " + (r["error"] or "; ".join(c["check"] for c in r["checks"] if not c["ok"]))[:300]
         + (f"  \n  judge: {' | '.join(r['judge_reasons'])[:300]}" if r["judge_reasons"] else "")
         + f"  \n  output: `{json.dumps(r['output'], ensure_ascii=False, default=str)[:400]}`" for r in fails)
-    md = (header + "\n## By role/group\n\n" + md_table(by_group, "group") + "\n\n## By call type\n\n"
+    md = (header + "\n## By suite\n\n" + md_table(by_suite, "suite") + "\n\n## By role/group\n\n" + md_table(by_group, "group") + "\n\n## By call type\n\n"
           + md_table(by_call, "call") + "\n\n## Failures\n\n" + (fail_md or "none") + "\n")
-    print("\n" + md_table(by_group, "group") + "\n\n" + md_table(by_call, "call"))
+    print("\n" + md_table(by_suite, "suite") + "\n\n" + md_table(by_group, "group") + "\n\n" + md_table(by_call, "call"))
+    prov = {}
+    for r in results:
+        for pv in r["providers"]:
+            prov[pv] = prov.get(pv, 0) + 1
+    header += "\nProviders (case runs touching each): " + ", ".join(f"{k} {v}" for k, v in sorted(prov.items(), key=lambda x: -x[1])) + "\n"
+    md = md.replace("\n## By suite", header[header.index("\nProviders"):] + "\n## By suite", 1)
     print("\n" + header)
     os.makedirs(os.path.join(HERE, "results"), exist_ok=True)
     slug = re.sub(r"[^\w.-]", "_", args.model) + ("_think" if args.reasoning else "") + (f"_{args.tag}" if args.tag else "")
     base = os.path.join(HERE, "results", f"{slug}_{time.strftime('%Y%m%d-%H%M%S')}")
     open(base + ".md", "w").write(md)
-    json.dump({"model": args.model, "reasoning": args.reasoning, "by_group": by_group, "by_call": by_call,
+    json.dump({"model": args.model, "reasoning": args.reasoning, "tag": args.tag, "by_suite": by_suite,
+               "by_group": by_group, "by_call": by_call, "judge_cost": judge_gw.cost,
                "results": results}, open(base + ".json", "w"), indent=1, ensure_ascii=False, default=str)
     print(f"wrote {base}.md / .json")
 

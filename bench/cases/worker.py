@@ -1,5 +1,7 @@
 """Worker: single worker_step decisions per role, and full episodes
 (research on the fake web, write, synthesize, code on real files)."""
+import re
+
 from bench.checks import contains, custom, eq, judge, length, one_of, words
 from bench.corpus import PAGES
 from sandman.tools import FakeWeb
@@ -10,7 +12,7 @@ PROFILE = "- The owner lives in Zurich.\n- The owner prefers low-maintenance sol
 
 def wctx(role, title, goal, done_when, **kw):
     c = {"role": role, "title": title, "goal": goal, "constraints": [], "done_when": done_when, "profile": PROFILE,
-         "catalog": [], "inputs": [], "comments": [], "art_ids": []}
+         "memory": [], "inputs": [], "comments": [], "art_ids": []}
     c.update(kw)
     return c
 
@@ -61,9 +63,11 @@ CASES = [
     step(6, wctx("research", *GARDENA_TASK), [eq("action", "finish"), contains("summary", "89", "15")],
          steps=[S_SEARCH, S_FETCH_INJ, S_FETCH], n=12),
     step(7, wctx("research", *GARDENA_TASK,
-                 catalog=[{"id": "not_gardena", "title": "GARDENA Micro-Drip starter set",
-                           "one_liner": "Price (CHF 89.90) and coverage (15 m²) of the Gardena drip starter set"}]),
-         [eq("action", "open_note")]),
+                 memory=[{"id": "not_gardena", "title": "GARDENA Micro-Drip starter set", "one_liner": "Drip kit",
+                          "claims": [{"text": "Costs CHF 89.90", "observed_at": "2026-09-27"},
+                                     {"text": "One set covers 15 m²", "observed_at": "2026-09-27"}]}]),
+         [custom("uses memory: finishes with its facts, or checks the web once",
+                 lambda o, c: (o["action"] == "finish" and "89.90" in o["summary"]) or o["action"] == "web_search")]),
     step(8, wctx("research", *GARDENA_TASK[:2], ["states the price in CHF", "cites at least 2 sources"],
                  comments=["verifier: Not met: cites at least 2 sources: sources has 1 items"]),
          [eq("action", "finish"), length("sources", 2, 10)],
@@ -73,7 +77,7 @@ CASES = [
                                                "Keller, asking for permission to install a drip irrigation kit on "
                                                "the balcony.", ["email is saved as a file", "under 150 words"],
                  inputs=[RESEARCH_RESULT]),
-         [eq("action", "write_artifact"), contains("content", "keller", "drip"), words("content", 30, 170)], n=8),
+         [eq("action", "write_artifact"), contains("what", ("email", "keller", "landlord"))], n=8),
     step(10, wctx("write", "Email to landlord", "Write a short polite email (under 150 words) to the landlord, Ms. "
                                                 "Keller, asking for permission to install a drip irrigation kit on "
                                                 "the balcony.", ["email is saved as a file", "under 150 words"],
@@ -101,7 +105,9 @@ CASES = [
                   inputs=["Result of \"Details on GARDENA Micro-Drip\" [done]:\nCHF 89.90, covers 15 m².",
                           "Result of \"Details on Hozelock Easy Drip\" [failed]:\nharness: tool_error: site down",
                           "Result of \"Details on Claber Oasis\" [done]:\nCHF 119, covers 4 m²."]),
-         [one_of("action", ["finish", "write_artifact"]), contains("", "hozelock")], n=6),
+         [custom("finish mentioning the failed Hozelock detail, or writes a report first",
+                 lambda o, c: o["action"] == "write_artifact" or (o["action"] == "finish" and "hozelock" in
+                                                                  str(o).lower()))], n=6),
     # code
     step(13, wctx("code", "Fix budget test", "The test in test_budget.py fails. Fix the bug in budget.py.",
                   ["python test_budget.py exits with code 0"]),
@@ -115,6 +121,10 @@ CASES = [
 ]
 
 # ---------- episodes (real worker loop) ----------
+
+def bullets(text):
+    return sum(1 for ln in text.splitlines() if re.match(r"\s*([-*•]|\d+[.)])\s", ln))
+
 
 def ep(i, role, title, goal, done_when, checks, max_turns=8, **kw):
     return {"id": f"worker_ep_{i}", "call": "worker_episode", "group": f"worker_{role}",
@@ -147,8 +157,7 @@ CASES += [
        inputs=[RESEARCH_RESULT]),
     ep(6, "write", "Five bullets", "Summarize the research result into exactly 5 bullet points and save them",
        ["exactly 5 bullet points", "saved as a file"],
-       [finished, custom("artifact has exactly 5 bullets", lambda o, c: sum(
-           1 for ln in o["last_artifact"].splitlines() if ln.strip()[:1] in "-*•") == 5)],
+       [finished, custom("artifact has exactly 5 bullets (or numbered points)", lambda o, c: bullets(o["last_artifact"]) == 5)],
        inputs=[RESEARCH_RESULT]),
     ep(7, "code", "Fix budget test", "The test in test_budget.py fails. Fix the bug in budget.py.",
        ["python test_budget.py exits with code 0"],

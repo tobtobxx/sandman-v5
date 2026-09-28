@@ -25,9 +25,11 @@ sandman/
   recipes.py      two seed recipes
   tools.py        web (live or fake corpus), artifacts, files, run
 bench/
-  cases/*.py      ~150 small isolated tasks, grouped by role
-  corpus.py       fake web pages for worker episodes (incl. a prompt injection)
-  run.py          runner + report (bench/results/*.md|json)
+  cases/*.py      173 tasks: core suite (isolated calls) + harness suite (harness.py:
+                  long pages, files, memory, follow-ups, full dispatcher pipelines)
+  corpus.py       fake web pages for worker episodes (incl. a prompt injection, a long page)
+  run.py          runner + report with costs (bench/results/*.md|json)
+  compare.py      per-group and per-case diff of two runs
 tests/            offline tests of the harness with a scripted fake model
 docs/DEVIATIONS.md
 ```
@@ -40,8 +42,10 @@ export OPENROUTER_API_KEY=...            # or SANDMAN_BASE_URL for a local llama
 
 python -m pytest tests                   # harness logic, no model needed
 python -m bench.run                      # full bench, default qwen/qwen3.6-35b-a3b, thinking off
-python -m bench.run --repeat 3 --only router,triage
+python -m bench.run --repeat 3 --only router,triage   # or --only harness
+python -m bench.compare bench/results/A.json bench/results/B.json
 python -m bench.run --model qwen/qwen3.8-flash
+SANDMAN_PROVIDERS=Darkbloom python -m bench.run    # prefer an OpenRouter provider
 
 python -m sandman --fake-web bench chat   # or live web without --fake-web
 python -m sandman card "Gardena price" "Find the price of the GARDENA Micro-Drip starter set" \

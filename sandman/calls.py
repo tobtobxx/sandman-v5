@@ -21,13 +21,13 @@ def prompts():
     return _PROMPTS
 
 
-def render(name, **v):
+def render(prompt_name, **v):
     def sub(m):
         k = m.group(1)
         return str(v[k]) if k in v else m.group(0)
-    t = prompts()[name]
-    sys_t, _, user_t = t.partition("\n---\n")
-    return re.sub(r"\{(\w+)\}", sub, sys_t), re.sub(r"\{(\w+)\}", sub, user_t)
+    t = prompts()[prompt_name]
+    sys_t, _, user_t = ("\n" + t).partition("\n---\n")
+    return re.sub(r"\{(\w+)\}", sub, sys_t.lstrip("\n")), re.sub(r"\{(\w+)\}", sub, user_t)
 
 
 # ---------- schema helpers ----------
@@ -109,17 +109,16 @@ def topic_title(gw, text):
 
 # ---------- front desk ----------
 
-def frontdesk_schema(catalog_ids, question_ids, final):
+def frontdesk_schema(open_card_ids, question_ids, final):
     acts = [obj(action={"const": "reply"}, text=S(1500)), obj(action={"const": "no_reply"})]
     if not final:
         acts += [
             obj(action={"const": "create_card"}, title=S(100), goal=S(600),
                 done_when=arr(S(200), max_items=5, min_items=1), role=enum(ROLES)),
-            obj(action={"const": "board_status"}, card_id=NS),
             obj(action={"const": "remind"}, when=S(60), text=S(300)),
         ]
-        if catalog_ids:
-            acts.append(obj(action={"const": "open_note"}, note_id=enum(catalog_ids)))
+        if open_card_ids:
+            acts.append(obj(action={"const": "add_to_card"}, card_id=enum(open_card_ids), text=S(500)))
         if question_ids:
             acts.append(obj(action={"const": "answer_question"}, question_id=enum(question_ids), answer=S(500)))
     return {"anyOf": acts}
@@ -128,35 +127,47 @@ def frontdesk_schema(catalog_ids, question_ids, final):
 FRONTDESK_TOOLS = {
     "reply": "reply(text): send your answer to {owner} and end the turn",
     "no_reply": "no_reply(): end the turn without a message (e.g. after a plain \"thanks\")",
-    "create_card": "create_card(title, goal, done_when, role): hand real work to a worker",
-    "board_status": "board_status(card_id): see the state and result of a card",
+    "create_card": "create_card(title, goal, done_when, role): hand new work to a worker. role: research (find "
+                   "facts), write (write a text such as an email), synthesize (combine given results), code",
+    "add_to_card": "add_to_card(card_id, text): add a new wish or detail from {owner} to an open card",
     "remind": "remind(when, text): remind {owner} at a time, e.g. when=\"friday 9am\"",
-    "open_note": "open_note(note_id): read a note from memory",
     "answer_question": "answer_question(question_id, answer): pass {owner}'s answer to a card that asked a question",
 }
+OPEN_STATES = {"new", "ready", "running", "waiting", "blocked", "verifying"}
+
+
+def card_line(c):
+    """c: {id, title, state, result?, question?} → one line with what the desk needs to know."""
+    line = f"{c['id']} — {c['title']} — {c['state']}"
+    if c.get("result"):
+        line += f" — result: {c['result'][:600]}"
+    if c.get("question"):
+        line += f" — waiting for {c['question']}"
+    return line
 
 
 def frontdesk_step(gw, ctx, steps, k, n):
-    """ctx: dict with owner, now, profile, topic_title, topic_summary, history[], cards[],
-    questions[{id,text}], catalog[{id,title,one_liner}], text. steps: list of (action, result) strings."""
+    """ctx: dict with owner, now, profile, topic_title, topic_summary, history[], cards[{id,title,state,result?,
+    question?}], questions[{id,text}], memory[notes with claims], text. steps: list of (action, result) strings."""
     final = k >= n
     step_txt = ""
     if steps:
         step_txt = "\nYour steps so far:\n" + lines([f"{i+1}. {a}\n   → {r}" for i, (a, r) in enumerate(steps)]) + "\n"
     owner = ctx.get("owner", "the owner")
-    tools = [t for t in FRONTDESK_TOOLS if not (t == "open_note" and not ctx.get("catalog"))
+    cards = ctx.get("cards", [])
+    open_ids = [c["id"] for c in cards if c["state"] in OPEN_STATES]
+    tools = [t for t in FRONTDESK_TOOLS if not (t == "add_to_card" and not open_ids)
              and not (t == "answer_question" and not ctx.get("questions"))]
     tool_lines = bullets([FRONTDESK_TOOLS[t].replace("{owner}", owner) for t in tools])
     s, u = render("frontdesk_step", owner=owner, now=ctx.get("now", ""), tool_lines=tool_lines,
                   profile=ctx.get("profile") or "(none)", topic_title=ctx.get("topic_title", "(new topic)"),
                   topic_summary=ctx.get("topic_summary") or "(none)", history=lines(ctx.get("history", [])),
-                  cards=bullets(ctx.get("cards", [])),
+                  cards=bullets([card_line(c) for c in cards]),
                   questions=bullets([f"{q['id']}: {q['text']}" for q in ctx.get("questions", [])]),
-                  catalog=bullets([f"{c['id']} — {c['title']} — {c['one_liner']}" for c in ctx.get("catalog", [])]),
+                  memory=format_notes(ctx.get("memory", [])) if ctx.get("memory") else "(nothing)",
                   text=ctx["text"], steps=step_txt, k=k, n=n,
                   final="\nThis is your final step: reply or no_reply." if final else "")
-    schema = frontdesk_schema([c["id"] for c in ctx.get("catalog", [])],
-                              [q["id"] for q in ctx.get("questions", [])], final)
+    schema = frontdesk_schema(open_ids, [q["id"] for q in ctx.get("questions", [])], final)
     return gw.call("frontdesk_step", s, u, schema, temperature=0.2)
 
 
@@ -218,19 +229,25 @@ def render_answer(gw, card, notes):
 # ---------- work ----------
 
 def triage(gw, card, tools, recipes, max_turns, allow_no=True):
-    """tools: [(name, description)], recipes: [{id, title}]"""
+    """Two decisions, one call each: does it fit one session; if not, which recipe.
+    tools: [(name, description)], recipes: [{id, title}]"""
+    recipe_lines = bullets([f"{r['id']}: {r['title']}" for r in recipes])
     s, u = render("triage", max_turns=max_turns, tool_lines=bullets([f"{n}: {d}" for n, d in tools]),
                   title=card["title"], goal=card["goal"], done_when=bullets(card.get("done_when", [])),
-                  recipe_lines=bullets([f"{r['id']}: {r['title']}" for r in recipes]))
+                  recipe_lines=recipe_lines)
     fits = ["yes", "no", "unsure"] if allow_no else ["yes", "unsure"]
-    schema = obj(fits_one_session=enum(fits), recipe_id=enum([r["id"] for r in recipes] + ["none"]),
-                 missing_info=NS)
-    return gw.call("triage", s, u, schema)
+    t = gw.call("triage", s, u, obj(fits_one_session=enum(fits), missing_info=NS))
+    t["recipe_id"] = "none"
+    if t["fits_one_session"] == "no" and recipes:
+        # asked alone, the model nearly always picks some recipe; only ask after "no"
+        s, u = render("pick_recipe", title=card["title"], goal=card["goal"], recipe_lines=recipe_lines)
+        t["recipe_id"] = gw.call("pick_recipe", s, u,
+                                 obj(recipe_id=enum([r["id"] for r in recipes] + ["none"])))["recipe_id"]
+    return t
 
 
 def triage_split(t):
-    """Effective triage decision (code rule): choosing a multi-step plan means splitting."""
-    return t["fits_one_session"] == "no" or t["recipe_id"] != "none"
+    return t["fits_one_session"] == "no"
 
 
 def plan_fill(gw, card, recipe):
@@ -259,12 +276,13 @@ def plan_generate(gw, card, roles=ROLES):
 
 TOOL_DOCS = {
     "web_search": "web_search(query): search the web, returns titles, urls and snippets",
-    "web_fetch": "web_fetch(url): read a web page as text",
-    "open_note": "open_note(note_id): read a note from memory",
-    "read_artifact": "read_artifact(art_id, offset): read a saved file, 3000 characters from offset",
-    "write_artifact": "write_artifact(name, content): save a file as a result",
+    "web_fetch": "web_fetch(url): read a web page as text (long pages are saved; read on with read_artifact)",
+    "read_artifact": "read_artifact(art_id, offset): read a saved file, 2500 characters from offset",
+    "write_artifact": "write_artifact(name, what): save a file as a result. Say what goes in it; you write "
+                      "the text right after",
     "read_file": "read_file(path): read a file in your work folder",
-    "write_file": "write_file(path, content): write a whole file in your work folder",
+    "write_file": "write_file(path, what): write a whole file. Say what it must contain; you write the full "
+                  "file right after",
     "run": "run(command): run a shell command in your work folder",
     "list_dir": "list_dir(path): list files",
 }
@@ -277,16 +295,14 @@ def tool_schemas(tools, note_ids, art_ids):
             out.append(obj(action={"const": t}, query=S(200)))
         elif t == "web_fetch":
             out.append(obj(action={"const": t}, url=S(500)))
-        elif t == "open_note" and note_ids:
-            out.append(obj(action={"const": t}, note_id=enum(note_ids)))
         elif t == "read_artifact" and art_ids:
             out.append(obj(action={"const": t}, art_id=enum(art_ids), offset={"type": "integer", "minimum": 0}))
         elif t == "write_artifact":
-            out.append(obj(action={"const": t}, name=S(80), content=S(12000)))
+            out.append(obj(action={"const": t}, name=S(80), what=S(400)))
         elif t == "read_file":
             out.append(obj(action={"const": t}, path=S(200)))
         elif t == "write_file":
-            out.append(obj(action={"const": t}, path=S(200), content=S(12000)))
+            out.append(obj(action={"const": t}, path=S(200), what=S(400)))
         elif t == "run":
             out.append(obj(action={"const": t}, command=S(300)))
         elif t == "list_dir":
@@ -331,27 +347,37 @@ def worker_schema(role, tools, note_ids, art_ids, allowed_terminals, allow_tools
     return {"anyOf": acts}
 
 
-def worker_step(gw, ctx, k, n, allowed_terminals=TERMINALS):
-    """ctx: role, tools[], title, goal, constraints[], done_when[], profile, catalog[{id,title,one_liner}],
+def worker_prompt(ctx, k, n):
+    """ctx: role, tools[], title, goal, constraints[], done_when[], profile, memory[notes with claims],
     inputs[str], comments[str], transcript[str], art_ids[]"""
-    role, tools = ctx["role"], ctx["tools"]
+    tools = [t for t in ctx["tools"] if not (t == "read_artifact" and not ctx.get("art_ids"))]
+    preamble = prompts()["role_" + ctx["role"]] + "\n\nYour tools:\n" + bullets([TOOL_DOCS[t] for t in tools])
     final = k >= n
-    catalog = ctx.get("catalog", [])
-    note_ids = [c["id"] for c in catalog]
-    art_ids = ctx.get("art_ids", [])
-    shown_tools = [t for t in tools if not (t == "open_note" and not note_ids)
-                   and not (t == "read_artifact" and not art_ids)]
-    preamble = prompts()["role_" + role] + "\n\nYour tools:\n" + bullets([TOOL_DOCS[t] for t in shown_tools])
-    s, u = render("worker_step", preamble=preamble, title=ctx["title"], goal=ctx["goal"],
+    return render("worker_step", preamble=preamble, title=ctx["title"], goal=ctx["goal"],
                   constraints=bullets(ctx.get("constraints", [])), done_when=bullets(ctx.get("done_when", [])),
                   profile=ctx.get("profile") or "(none)",
-                  catalog=bullets([f"{c['id']} — {c['title']} — {c['one_liner']}" for c in catalog]),
+                  memory=format_notes(ctx["memory"]) if ctx.get("memory") else "(nothing)",
                   inputs=lines(ctx.get("inputs", [])), comments=bullets(ctx.get("comments", [])),
                   transcript=lines(ctx.get("transcript", []), "(none yet)"), k=k, n=n,
                   final="\nThis is your final step: you must choose finish, checkpoint, block or fail." if final else "")
+
+
+def worker_step(gw, ctx, k, n, allowed_terminals=TERMINALS):
+    s, u = worker_prompt(ctx, k, n)
+    final = k >= n
     terminals = [t for t in allowed_terminals if not (final and t == "split")]
-    schema = worker_schema(role, tools, note_ids, art_ids, terminals, allow_tools=not final)
-    return gw.call("worker_step", s, u, schema, temperature=0.2, max_tokens=5000, check=not_repetitive)
+    schema = worker_schema(ctx["role"], ctx["tools"], [], ctx.get("art_ids", []), terminals, allow_tools=not final)
+    return gw.call("worker_step", s, u, schema, temperature=0.2, max_tokens=3000, check=not_repetitive)
+
+
+def write_content(gw, ctx, k, n, name, what):
+    """Second half of write_file/write_artifact: the content as plain text, no JSON.
+    Small models lose newlines and escapes when they write files inside JSON strings."""
+    s, u = worker_prompt(ctx, k, n)
+    u = u.rsplit("\nStep ", 1)[0]
+    _, u2 = render("write_content", name=name, what=what)
+    return gw.call("write_content", s, u + "\n\n" + u2, None, temperature=0.2, max_tokens=6000,
+                   check=lambda t: not_repetitive({"content": t}))
 
 
 def not_repetitive(o):
@@ -378,7 +404,7 @@ def match_subject(gw, subject, claim, notes):
     return gw.call("match_subject", s, u, obj(note_id=enum([n["id"] for n in notes] + ["none"])))
 
 
-RUBRIC_KEYS = ["reusable", "costly", "durable", "task_mechanics", "trivial"]
+RUBRIC_KEYS = ["reusable", "costly", "task_mechanics", "trivial"]
 
 
 def relevance_rubric(gw, subject, claim, source, card_title):
@@ -390,11 +416,8 @@ def keep_fact(r, volatility="slow"):
     """The keep-rule is code (design §7.5); only the booleans come from the model."""
     if r["task_mechanics"] or r["trivial"]:
         return False
-    if not (r["reusable"] or r["costly"]):
-        return False
-    if not r["durable"] and not (volatility == "volatile" and r["costly"]):
-        return False
-    return True
+    # "durable" was dropped: volatility comes from the worker, staleness from the harness
+    return bool(r["reusable"] or r["costly"])
 
 
 def consolidate_fact(gw, note_title, claims, claim, source, observed_at):

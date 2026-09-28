@@ -4,9 +4,9 @@ from . import calls
 from .llm import LLMFailure
 
 ROLE_TOOLS = {
-    "research": ["web_search", "web_fetch", "open_note", "read_artifact", "write_artifact"],
-    "write": ["read_artifact", "write_artifact", "open_note"],
-    "synthesize": ["read_artifact", "open_note", "write_artifact"],
+    "research": ["web_search", "web_fetch", "read_artifact"],
+    "write": ["read_artifact", "write_artifact"],
+    "synthesize": ["read_artifact", "write_artifact"],
     "code": ["read_file", "write_file", "run", "list_dir"],
 }
 MAX_TURNS = {"research": 12, "write": 8, "synthesize": 6, "code": 15}
@@ -56,6 +56,12 @@ def run_worker(gw, ctx, env, max_turns=None, allowed_terminals=None, on_step=Non
         prev = next((i for i, (b, _) in enumerate(steps) if b == a), None)
         if prev is not None:  # weak models loop; don't re-run, point back instead
             r = f"You already did exactly this in step {prev + 1}. Use that result or choose another action."
+        elif a["action"] in ("write_file", "write_artifact"):
+            try:  # the content itself is a separate plain-text call
+                a["content"] = calls.write_content(gw, ctx, k, n, a.get("path") or a.get("name"), a["what"])
+                r = env.execute(a)
+            except LLMFailure as e:
+                r = f"Error: writing failed ({e}). Try again."
         else:
             r = env.execute(a)
         steps.append((a, r))

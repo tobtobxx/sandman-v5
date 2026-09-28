@@ -1,5 +1,6 @@
 """Offline tests of the harness control flow with a scripted fake model.
 These check the code (state machine, routing, memory), not the model."""
+import copy
 import datetime
 
 import jsonschema
@@ -25,8 +26,9 @@ class FakeGW:
         s = self.script.get(call_type)
         if s is None:
             raise LLMFailure(f"no script for {call_type}")
-        out = s.pop(0) if isinstance(s, list) else (s(system, user, schema) if callable(s) else s)
-        jsonschema.validate(out, schema)
+        out = copy.deepcopy(s.pop(0) if isinstance(s, list) else (s(system, user, schema) if callable(s) else s))
+        if schema is not None:
+            jsonschema.validate(out, schema)
         if check:
             check(out)
         self.log.append((call_type, out))
@@ -56,7 +58,7 @@ def test_last_turn_schema_only_terminal():
 
 def test_single_card_end_to_end(db, tmp_path):
     gw = FakeGW({
-        "triage": {"fits_one_session": "yes", "recipe_id": "none", "missing_info": None},
+        "triage": {"fits_one_session": "yes", "missing_info": None},
         "extract_entities": {"entities": ["Gardena"]},
         "worker_step": [
             {"action": "web_search", "query": "gardena micro drip price"},
@@ -75,7 +77,7 @@ def test_single_card_end_to_end(db, tmp_path):
 
 def test_verify_fail_retries_then_asks(db, tmp_path):
     fin = {"action": "finish", "summary": "no idea", "sources": [], "facts": [], "open_questions": []}
-    gw = FakeGW({"triage": {"fits_one_session": "yes", "recipe_id": "none", "missing_info": None},
+    gw = FakeGW({"triage": {"fits_one_session": "yes", "missing_info": None},
                  "extract_entities": {"entities": []}, "worker_step": [fin, fin]})
     topic = Conversation(db, gw).new_topic("Test")
     d = Dispatcher(db, gw, FakeWeb(PAGES), str(tmp_path), log=lambda *a: None)
@@ -100,9 +102,9 @@ def test_split_recipe_fanout_and_join(db, tmp_path):
 
     gw = FakeGW({
         "extract_entities": {"entities": []},
-        "triage": lambda s, u, sc: ({"fits_one_session": "no", "recipe_id": "rcp_research_compare_recommend",
-                                     "missing_info": None} if "Goal: Compare drip kits" in u else
-                                    {"fits_one_session": "yes", "recipe_id": "none", "missing_info": None}),
+        "triage": lambda s, u, sc: ({"fits_one_session": "no", "missing_info": None} if "Goal: Compare drip kits" in u
+                                    else {"fits_one_session": "yes", "missing_info": None}),
+        "pick_recipe": {"recipe_id": "rcp_research_compare_recommend"},
         "plan_fill": {"subject": "drip kits", "criteria": "price", "max_options": 2},
         "worker_step": worker, "verify_criterion": {"reason": "ok", "verdict": "pass"},
     })
@@ -165,7 +167,7 @@ def test_consolidator_duplicate_and_contradiction(db):
                                "volatility": "evergreen"},
                               {"subject": "Gardena kit", "claim": "covers 40 m²", "source": "https://b",
                                "volatility": "evergreen"}])
-    keep = {k: False for k in calls.RUBRIC_KEYS} | {"reusable": True, "durable": True}
+    keep = {k: False for k in calls.RUBRIC_KEYS} | {"reusable": True}
     gw = FakeGW({"relevance_rubric": keep, "render_note": {"one_liner": "Gardena kit coverage"},
                  "consolidate_fact": [{"decision": "duplicate", "target_claim_id": c1},
                                       {"decision": "contradicts", "target_claim_id": c1}]})
@@ -177,10 +179,30 @@ def test_consolidator_duplicate_and_contradiction(db):
 
 def test_keep_rule():
     base = {k: False for k in calls.RUBRIC_KEYS}
-    assert calls.keep_fact(base | {"reusable": True, "durable": True})
-    assert not calls.keep_fact(base | {"reusable": True, "durable": True, "trivial": True})
-    assert calls.keep_fact(base | {"costly": True}, "volatile")
-    assert not calls.keep_fact(base | {"reusable": True}, "volatile")
+    assert calls.keep_fact(base | {"reusable": True})
+    assert calls.keep_fact(base | {"costly": True})
+    assert not calls.keep_fact(base | {"reusable": True, "trivial": True})
+    assert not calls.keep_fact(base | {"costly": True, "task_mechanics": True})
+    assert not calls.keep_fact(base)
+
+
+def test_long_page_is_paged(tmp_path):
+    from bench.corpus import PAGES
+    from sandman.tools import ArtifactStore, ToolEnv
+    env = ToolEnv(web=FakeWeb(PAGES), artifacts=ArtifactStore(str(tmp_path)))
+    r = env.execute({"action": "web_fetch", "url": "https://www.hev-zuerich.ch/hausordnung"})
+    assert r.startswith("(long page, saved) [characters 0-2500 of") and "offset=2500" in r[:200]
+
+
+def test_write_is_plain_text_call(tmp_path):
+    from sandman.tools import ArtifactStore, ToolEnv
+    from sandman.worker import run_worker
+    gw = FakeGW({"worker_step": [{"action": "write_file", "path": "a.py", "what": "two functions"},
+                                 {"action": "finish", "summary": "done", "tests_passed": True, "open_questions": []}],
+                 "write_content": lambda s, u, sc: "def a():\n    return 1\n"})
+    env = ToolEnv(artifacts=ArtifactStore(str(tmp_path / "arts")), workdir=str(tmp_path))
+    run_worker(gw, {"role": "code", "title": "t", "goal": "g", "done_when": []}, env, max_turns=3)
+    assert open(tmp_path / "a.py").read() == "def a():\n    return 1\n"
 
 
 def test_parse_when():

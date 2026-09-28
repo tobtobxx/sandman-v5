@@ -29,9 +29,10 @@ and terminal actions.
 SQLite FTS5 (BM25). There is no embedding model and no vector search (see
 design open question 3). Topic shortlists rank by recency and word overlap.
 
-**Workers see the memory catalog but no librarian notes inline.** The catalog
-(ids, titles, one-liners) is shown and `open_note` is available; the "inline
-the top 2 notes" step is left out to keep prompts short.
+**Memory is pushed inline, there is no `open_note` tool.** Workers and the
+front desk get the retrieved notes with their claims (≤6 notes × 5 claims)
+directly in the context. One tool fewer; the design's P9 taken one step
+further.
 
 **Recipe fan-out over fact subjects.** The `gather` step of
 `rcp_research_compare_recommend` fans out over the distinct `subject`s of its
@@ -41,6 +42,25 @@ the finish schema has no separate item list.
 **No sandbox for `run`.** The code role's `run` executes in the card's work
 folder with a timeout, but not in a container. Do not point code cards at
 anything valuable.
+
+**Toolsets (changed after benchmarking, see docs/BENCH.md).**
+research: `web_search`, `web_fetch`, `read_artifact` (no `write_artifact`:
+its result is the finish action). write / synthesize: `read_artifact`,
+`write_artifact`. code: `read_file`, `write_file`, `run`, `list_dir`. Front
+desk: `reply`, `no_reply`, `create_card`, `remind`, plus `add_to_card` when
+there are open cards and `answer_question` when there are open questions (at
+most once per turn). `board_status` is gone: card lines show the state, the
+result summary when done, and the pending question when blocked.
+
+**Long content is written outside JSON.** `write_file(path, what)` and
+`write_artifact(name, what)` only name and describe the file; the harness then
+makes a plain-text call ("write the full content of …") and saves the answer.
+Inside JSON strings the model loses newlines on most providers. This departs
+from "free text only inside schema fields" for file bodies only.
+
+**Long tool results are paged.** `web_fetch` saves pages longer than 2500
+characters as an artifact and shows the first window with a
+`[characters 0-2500 of N, read on with read_artifact(...)]` header.
 
 **Artifacts are harness-tracked.** The finish schema has no `artifacts` field;
 the harness attaches the ids written by `write_artifact` during the session.
@@ -75,9 +95,17 @@ treated as invalid output and retried once.
 **Repeated tool calls are not re-executed.** The worker gets "You already did
 exactly this in step k" instead.
 
-**Triage rule in code.** Choosing a recipe means splitting, whatever
-`fits_one_session` says. Cards created by the planner are never split again by
-triage (the planner already sized them).
+**Triage is two calls.** `triage` asks only fits-one-session (yes/no/unsure)
+and missing info, with the known recipes shown as a hint; only after "no" does
+`pick_recipe` choose a recipe or none. Asked on its own, `pick_recipe` picks
+some recipe for almost everything. Cards created by the planner are never
+split again by triage (the planner already sized them).
+
+**Relevance rubric has 4 questions.** `durable` was dropped; the worker already
+gives a volatility class and staleness is handled by the harness. Keep rule:
+not task_mechanics and not trivial and (reusable or costly).
 
 **Front desk template ack.** If the front desk acted (card, reminder, answer)
 but ended with `no_reply`, the harness sends a short template acknowledgement.
+Tool results tell the desk what to do next ("Created card X. Handle anything
+else the message asks for, then reply to Alex.").

@@ -119,6 +119,16 @@ def catalog(db, ids):
             for n in (db.get("notes", i) for i in ids) if n]
 
 
+def memory_pack(db, ids, max_notes=6, max_claims=5):
+    """Notes with their claims, pushed into the session (P9) instead of an open_note tool."""
+    out = []
+    for i in ids[:max_notes]:
+        n = note_view(db, i)
+        n["claims"] = n["claims"][:max_claims]
+        out.append(n)
+    return out
+
+
 # ---------- librarian (pre-flight, §7.6) ----------
 
 def librarian_preflight(gw, db, card):

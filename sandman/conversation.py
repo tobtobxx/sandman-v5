@@ -278,9 +278,9 @@ class Conversation:
         ctx = {"owner": self.owner, "now": datetime.datetime.now().strftime("%A %Y-%m-%d %H:%M"),
                "profile": memory.profile_text(db), "topic_title": topic["title"], "topic_summary": topic["summary"],
                "history": history,
-               "cards": [f"{c['id']} — {c['title']} — {c['state']}" for c in cards],
+               "cards": [self.card_view(c, qs) for c in cards],
                "questions": [{"id": q["id"], "text": f"{q['handle']} (card {q['card_id']}): {q['text']}"} for q in qs],
-               "catalog": memory.catalog(db, cat_ids), "text": text}
+               "memory": memory.memory_pack(db, cat_ids, max_notes=4), "text": text}
         steps, acted = [], []
         for k in range(1, FRONTDESK_STEPS + 1):
             try:
@@ -305,25 +305,34 @@ class Conversation:
                     post(db, topic["id"], "ack", " ".join(acks))
                 return
             r = self.frontdesk_tool(topic, a)
+            if t == "answer_question":
+                ctx["questions"] = []  # one answer per turn; the desk otherwise "answers" the others too
             acted.append((a, r))
             steps.append((_desc(a), r))
         # unreachable: last step only allows reply/no_reply
+
+    @staticmethod
+    def card_view(c, qs):
+        """What the desk sees of a card: state, result summary when done, open question when blocked."""
+        v = {"id": c["id"], "title": c["title"], "state": c["state"]}
+        if c["state"] == "done" and c["result"]:
+            v["result"] = c["result"].get("summary", "") + (
+                f" Recommendation: {c['result']['recommendation']}" if c["result"].get("recommendation") else "")
+        q = next((q for q in qs if q["card_id"] == c["id"]), None)
+        if q:
+            v["question"] = f"{q['handle']}: {q['text']}"
+        return v
 
     def frontdesk_tool(self, topic, a):
         db, t = self.db, a["action"]
         if t == "create_card":
             c = board.create_card(db, a["title"], a["goal"], role=a["role"], done_when=a["done_when"],
                                   origin_topic_id=topic["id"], created_by="frontdesk")
-            return f"Created card {c['id']}."
-        if t == "board_status":
-            cid = a.get("card_id")
-            rows = db.q("SELECT * FROM cards WHERE id=?", cid) if cid else \
-                db.q("SELECT * FROM cards WHERE origin_topic_id=? ORDER BY created_at DESC LIMIT 10", topic["id"])
-            return "\n".join(f"{c['id']} — {c['title']} — {c['state']}" +
-                             (f" — {(c['result'] or {}).get('summary', '')[:200]}" if c["state"] == "done" else "")
-                             for c in rows) or "No cards."
-        if t == "open_note":
-            return memory.note_text(db, a["note_id"])
+            return f"Created card {c['id']}. Handle anything else the message asks for, then reply to {self.owner}."
+        if t == "add_to_card":
+            board.comment(db, a["card_id"], "owner", a["text"])
+            return (f"Added to card {a['card_id']}; its next session will see it. Handle anything else the message "
+                    f"asks for, then reply to {self.owner}.")
         if t == "remind":
             when = parse_when(a["when"])
             if not when:
@@ -389,6 +398,8 @@ def _ack(x):
     a, r = x
     if a["action"] == "create_card" and r.startswith("Created"):
         return f"On it: \"{a['title']}\"."
+    if a["action"] == "add_to_card":
+        return "Noted, I passed that on."
     if a["action"] in ("remind", "answer_question") and not r.startswith("Error"):
         return r
     return None

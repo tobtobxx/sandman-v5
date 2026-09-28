@@ -9,7 +9,7 @@ import uuid
 
 import requests
 
-RESULT_CHARS = 3000
+RESULT_CHARS = 2500
 
 
 class FakeWeb:
@@ -96,9 +96,12 @@ class ArtifactStore:
             return "Error: unknown artifact."
         c = open(self.index[art_id]["path"]).read()
         part = c[offset:offset + length]
-        more = f"\n[... {len(c) - offset - length} more characters, use offset {offset + length}]" \
-            if len(c) > offset + length else ""
-        return part + more
+        if offset == 0 and len(c) <= length:
+            return part
+        # the marker goes first so transcript truncation can't cut it off
+        more = f", read on with read_artifact(art_id='{art_id}', offset={offset + length})" \
+            if len(c) > offset + length else ", end of file"
+        return f"[characters {offset}-{min(len(c), offset + length)} of {len(c)}{more}]\n{part}"
 
     def lines(self, ids=None):
         return [f"{a} — {m['name']} — {m['summary']}" for a, m in self.index.items() if ids is None or a in ids]
@@ -125,13 +128,15 @@ class ToolEnv:
             if t == "web_search":
                 return self.web.search(a["query"])
             if t == "web_fetch":
-                return self.web.fetch(a["url"])
-            if t == "open_note":
-                return self.notes.get(a["note_id"], "Error: unknown note.")
+                page = self.web.fetch(a["url"])
+                if len(page) > RESULT_CHARS and self.artifacts is not None:
+                    art = self.artifacts.write(re.sub(r"\W+", "_", a["url"])[-50:] + ".txt", page, self.card_id)
+                    return "(long page, saved) " + self.artifacts.read(art)
+                return page
             if t == "read_artifact":
                 return self.artifacts.read(a["art_id"], a.get("offset", 0))
             if t == "write_artifact":
-                art = self.artifacts.write(a["name"], a["content"], self.card_id)
+                art = self.artifacts.write(a["name"], a["content"].rstrip() + "\n", self.card_id)
                 self.written.append(art)
                 return f"Saved as {art}."
             if t == "read_file":
@@ -139,8 +144,8 @@ class ToolEnv:
             if t == "write_file":
                 p = self._path(a["path"])
                 os.makedirs(os.path.dirname(p), exist_ok=True)
-                open(p, "w").write(a["content"])
-                return f"Wrote {len(a['content'])} characters to {a['path']}."
+                open(p, "w").write(a["content"].rstrip() + "\n")
+                return f"Wrote {len(a['content'].splitlines())} lines to {a['path']}."
             if t == "list_dir":
                 p = self._path(a.get("path") or ".")
                 return "\n".join(sorted(os.listdir(p))) or "(empty)"

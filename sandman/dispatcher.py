@@ -179,14 +179,13 @@ class Dispatcher:
             workdir = os.path.join(self.workspace, c["root_id"], c["id"])
             os.makedirs(workdir, exist_ok=True)
         cat_ids = memory.retrieve(db, c["title"], c["goal"])
-        env = ToolEnv(web=self.web, artifacts=arts, workdir=workdir, card_id=c["id"],
-                      notes={i: memory.note_text(db, i) for i in cat_ids})
+        env = ToolEnv(web=self.web, artifacts=arts, workdir=workdir, card_id=c["id"])
         allowed = list(calls.TERMINALS)
         if c["depth"] >= MAX_DEPTH or c["phase"] == "synthesize":
             allowed.remove("split")
         role = c["role"] if c["role"] in ROLE_TOOLS else "research"
         ctx = {"role": role, "title": c["title"], "goal": c["goal"], "constraints": c["constraints"],
-               "done_when": c["done_when"], "profile": memory.profile_text(db), "catalog": memory.catalog(db, cat_ids),
+               "done_when": c["done_when"], "profile": memory.profile_text(db), "memory": memory.memory_pack(db, cat_ids),
                "inputs": [i for i in self.inputs(c) if not i.startswith("workdir:")],
                "comments": board.comments(db, c["id"])}
 
