@@ -20,7 +20,7 @@ full ×3: ~140 s, ~$0.16. The saving is modest because the harness episodes are
 most of the cost; a single repeat (the default) is about a third of that.
 
 Checks are mechanical except 13 cases that use an LLM judge
-(`google/gemini-3.8-flash`, with reasoning).
+(`xiaomi/mimo-v2.6-pro`, with reasoning; earlier runs used `google/gemini-3.8-flash`).
 
 ## Result of the harness iteration
 

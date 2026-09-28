@@ -105,7 +105,7 @@ CASES = [
                                       "Frau Keller, asking for permission to install a drip irrigation kit on the "
                                       "balcony.", ["email is saved as a file", "written in German", "under 120 words"],
        [finished, contains("last_artifact", "keller"), words("last_artifact", 25, 140),
-        judge("The saved email is written in German, polite, and asks Frau Keller for permission.", "last_artifact")],
+        judge("This email text is written in German, polite, and asks Frau Keller for permission.", "last_artifact")],
        inputs=[RESEARCH_RESULT]),
     # --- synthesize ---
     ep(1, "synthesize", "Recommend a kit", "Recommend the kit with the lowest price per m² of coverage.",

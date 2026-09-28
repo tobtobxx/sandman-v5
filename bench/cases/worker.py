@@ -153,7 +153,7 @@ CASES += [
        ["email is saved as a file", "under 150 words"],
        [finished, length("artifacts", 1, 3), contains("last_artifact", "keller", "drip"),
         words("last_artifact", 30, 170),
-        judge("The saved email is polite, addressed to Ms. Keller, and asks for permission.", "last_artifact")],
+        judge("This email text is polite, addressed to Ms. Keller, and asks for permission.", "last_artifact")],
        inputs=[RESEARCH_RESULT]),
     ep(6, "write", "Five bullets", "Summarize the research result into exactly 5 bullet points and save them",
        ["exactly 5 bullet points", "saved as a file"],

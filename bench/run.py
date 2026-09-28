@@ -113,7 +113,7 @@ def key_usage(gw):
 def main():
     p = argparse.ArgumentParser()
     p.add_argument("--model", default=os.environ.get("SANDMAN_MODEL", "qwen/qwen3.6-35b-a3b"))
-    p.add_argument("--judge-model", default=os.environ.get("SANDMAN_JUDGE_MODEL", "google/gemini-3.8-flash"))
+    p.add_argument("--judge-model", default=os.environ.get("SANDMAN_JUDGE_MODEL", "xiaomi/mimo-v2.6-pro"))
     p.add_argument("--reasoning", action="store_true", help="enable thinking (default: off)")
     p.add_argument("--repeat", type=int, default=1)
     p.add_argument("--full", action="store_true",
