@@ -20,15 +20,18 @@ model; see "What we did not learn" at the end.
    moved scores by ±3 points. The design should treat context packing,
    toolset shape and tool-result wording as first-class, tested design
    surface. Today it treats them as implementation detail.
-3. **Constrained decoding is necessary but not sufficient** (P3). Grammar
+3. **Several design components went unused** and should be removed: worker
+   `split`/`checkpoint`, triage "unsure", the recipe's separate compare step,
+   and typed deterministic verifier checks (items 5–8).
+4. **Constrained decoding is necessary but not sufficient** (P3). Grammar
    engines differ: key order, whitespace, escapes, length limits. Long free
    text must not be generated inside JSON at all.
-4. **Toolsets should be even smaller than §5.7/§6.5 say** (P4). Tools that only
+5. **Toolsets should be even smaller than §5.7/§6.5 say** (P4). Tools that only
    fetch information the harness already has should become context. Every
    intent the owner can express needs a tool, or the model will pretend.
-5. **Never let the model report what the harness can measure.** Examples:
+6. **Never let the model report what the harness can measure.** Examples:
    "tests passed", "reminder sent", "I updated the card".
-6. **The design has no failure model for the model itself looping or
+7. **The design has no failure model for the model itself looping or
    collapsing.** Several guards were needed and should be written into the
    design.
 
@@ -130,12 +133,31 @@ tests. A worker on a mis-created card "sent" a reminder that never existed.
 The desk said it "updated the card" when it had no tool to do so.
 
 **Proposed text.** Any fact the harness can observe is recorded by the
-harness, not reported by the model: whether tests pass (the harness runs the
-`done_when` command), which artifacts were written, which cards or reminders
-exist. Remove such fields from result schemas (`tests_passed`, `artifacts`).
-Code cards always get a `command_succeeds` criterion.
+harness, not reported by the model: which artifacts were written, which
+commands ran and with what exit code, which cards or reminders exist. Remove
+such fields from result schemas (`tests_passed`, `artifacts`). The verifier's
+judge gets these harness-recorded facts as part of the result it judges, e.g.
+the last `run` output of a code session, so "the tests pass" is judged against
+real output rather than the worker's claim. There are no separate deterministic
+checks (item 8).
 
-### 5. Guards against the model's own failure modes (new section, §13)
+### 5. Worker terminal actions (§5.3, §5.7, §5.11)
+
+**Seen.** Across ~380 worker decisions and all live runs, workers only ended
+with `finish`, `fail` and (once) `block`. `split` and `checkpoint` were never
+chosen: triage and the planner already do the decomposing, and the forced
+last turn already stops endless sessions.
+
+**Proposed text.**
+- Terminal actions: `finish`, `block`, `fail`. Remove `split` and
+  `checkpoint`, and with them continuation cards, `max_continuations` and the
+  `running → waiting` / `running → done (checkpoint)` transitions.
+- Decomposition happens only at triage (→ planner).
+- A worker that runs out of steps has failed. The last turn offers only
+  `finish`, `block` and `fail`, and `fail` goes through the normal retry and
+  escalation policy (§5.9).
+
+### 5b. Guards against the model's own failure modes (new section, §13)
 
 **Seen.** The design's failure table covers state failures (crash, card
 explosion) but not model behaviour:
@@ -169,8 +191,9 @@ explosion) but not model behaviour:
 - Cards created by the planner were triaged again and split again.
 
 **Proposed text.**
-- Triage = `fits_one_session` + `missing_info`, with the known plans visible
-  as context. `pick_recipe` is asked only after "no".
+- Triage = `fits_one_session` (**yes / no**; "unsure" was chosen 0 of 132
+  times and is removed) + `missing_info`, with the known plans visible as
+  context. `pick_recipe` is asked only after "no".
 - Cards created by the planner are never split by triage.
 - Open question for the design: should "compare N things" always go to a
   recipe (a code rule on the number of named items), or trust the model?
@@ -185,20 +208,40 @@ explosion) but not model behaviour:
 - Fan-out needs an item list; the finish schema has none. We fanned out over
   the fact subjects of the gather step.
 
-**Proposed text.** `plan_fill` criteria must come from the owner's request
-(quote them, don't invent them). Recipe steps that fan out declare their item
-field explicitly (e.g. `result.items[]` in the gather step's schema).
+- The recipe's own *compare* step and the parent's synthesis did the same
+  work twice: the parent rewrote the comparison and was verified again.
+
+**Proposed text.**
+- `plan_fill` criteria must come from the owner's request (quote them, don't
+  invent them).
+- Recipe steps that fan out declare their item field explicitly (e.g.
+  `result.items[]` in the gather step's schema).
+- Recipes end with the work steps. Combining is always done by **parent
+  synthesis** (§5.12), never by a separate "compare" step:
+  `rcp_research_compare_recommend` = gather → detail × N → parent synthesis.
 
 ### 8. Verifier (§5.8)
 
-**Seen.** Per-criterion judges work: 100% once reason comes before verdict.
-Typed deterministic checks ("at least N sources") catch most failures
-cheaply. Verifier feedback as a comment fixes most second attempts. An
-impossible criterion ("covers durability") ends in an owner question.
+**Seen.**
+- Per-criterion judges work: 100% once reason comes before verdict.
+- Verifier feedback as a comment fixes most second attempts.
+- An impossible criterion ("covers durability") ends in an owner question.
+- The typed deterministic checks almost never apply. Planners and the front
+  desk only write free-text criteria; only "at least N sources/facts/files"
+  was ever converted. In the one live case it fired, it exposed a schema bug
+  of mine.
+- A judge failed "the text is saved as a file" because it only sees text.
+  That's solved by giving the judge the harness-recorded facts (item 4), not
+  by a deterministic check.
 
-**Proposed text.** Keep as designed. Consider a criterion form "covers X, or
-says X is not available" for research criteria, so honest "not found" answers
-can pass.
+**Proposed text.**
+- Every `done_when` criterion is a judge criterion; remove the typed
+  deterministic checks (`min_items`, `field_present`, `file_exists`,
+  `links_resolve`, `command_succeeds`, `schema_valid`).
+- The judge sees the result plus harness-recorded facts (written files,
+  command outputs).
+- Consider a criterion form "covers X, or says X is not available" for
+  research criteria, so honest "not found" answers can pass.
 
 ### 9. Memory (§7)
 
@@ -216,17 +259,25 @@ can pass.
   The phrase "a different thing of the same kind is none" fixed it.
 - Workers produced facts with property subjects ("Price", "Setup"), creating
   junk notes. One prompt line fixed most.
-- Retries and continuations re-emit the same facts. The consolidator marks
-  them duplicates, but it costs calls.
+- Synthesis steps restate their children's facts, so the same fact is queued
+  several times. The consolidator marks them `duplicate` (corroboration + 1).
+  That works and costs ~2 calls per duplicate, which is acceptable for an
+  offline process. No separate de-duplication path is needed.
+- The design's nightly/idle consolidation run is what makes memory grow. In
+  the prototype it's manual (`/consolidate`); until it runs, nothing reaches
+  the profile or the notes.
+- With empty memory, every card spends one `extract_entities` call and finds
+  nothing. That only happens while memory is new or a domain is new, and the
+  call is small (~115 tokens in). Acceptable.
 
 **Proposed text.**
 - The rubric has 4 questions: reusable, costly, task_mechanics, trivial.
   Keep rule: not task_mechanics and not trivial and (reusable or costly).
 - The fact schema defines `subject` as "the thing, not a property".
-- The fact queue de-duplicates exact repeats from the same card tree before
-  consolidation.
 - State explicitly that the librarian, not the worker, is the mechanism for
   "don't redo work". Don't rely on worker prompts for it.
+- The librarian's `stale_note_ids` output needs a consumer: either implement
+  refresh cards (§7.6) or drop the field. The prototype ignores it.
 
 ### 10. Front desk intent (§6.5, open question)
 
@@ -293,6 +344,10 @@ the call that chose it, and no view of a whole session.
 ### 14. Small items
 
 - A bare `/new Title` must only open the topic, not be treated as a request.
+- Topics never close in the prototype: `dormant` / `archived` exist in the
+  schema but nothing sets them. Implement §6.4's lifecycle (dormant after 14
+  days without activity and no open cards, archive on request, e.g.
+  `/archive slug`), or the shortlist fills with stale topics.
 - Answering a question with free text ("cancel it, …") should use the
   option-matching the design describes for quick replies, not exact
   equality.
