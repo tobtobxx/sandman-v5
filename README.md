@@ -40,8 +40,36 @@ docs/            DESIGN.md (the design), ARCHITECTURE.md (how it is built), ROLE
 
 ## Run
 
+### NixOS / nix (recommended)
+
+`flake.nix` has a dev shell with Python and all dependencies from nixpkgs:
+
 ```bash
-pip install requests jsonschema pytest   # dateparser optional
+nix develop                      # then run the commands below as they are
+# or one-off, without entering the shell:
+nix develop -c python -m sandman --fake-web bench chat
+```
+
+(`nix run nixpkgs#python3 -- …` alone does not work: `requests` and
+`jsonschema` are not in the plain interpreter.)
+
+### uv (any Linux/macOS)
+
+`pyproject.toml` + `uv.lock` pin the dependencies; prefix every command with
+`uv run`:
+
+```bash
+uv run python -m sandman --fake-web bench chat
+nix run nixpkgs#uv -- run python -m sandman --fake-web bench chat   # uv via nix
+```
+
+On NixOS, uv's own downloaded Python and the prebuilt native wheel of
+`rpds-py` (a jsonschema dependency) may need `programs.nix-ld.enable = true`.
+Using the flake avoids that.
+
+### Commands
+
+```bash
 export OPENROUTER_API_KEY=...            # or SANDMAN_BASE_URL for a local llama.cpp/vLLM server
 
 python -m pytest tests                   # harness logic, no model needed
@@ -58,5 +86,7 @@ python -m sandman card "Gardena price" "Find the price of the GARDENA Micro-Drip
 python -m sandman board
 python -m sandman web --port 8080          # inspect everything in the browser (read-only)
 ```
+
+State lives in `.sandman/` in the current directory (`--home` to change).
 
 `bench/results/` holds the reports of the runs discussed in `docs/BENCH.md`.

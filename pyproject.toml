@@ -1,0 +1,12 @@
+[project]
+name = "sandman"
+version = "0.5.0"
+description = "Sandman v5 prototype: a multi-agent harness for weak, slow models"
+requires-python = ">=3.11"
+dependencies = ["requests", "jsonschema", "dateparser"]
+
+[dependency-groups]
+dev = ["pytest"]
+
+[tool.uv]
+package = false
