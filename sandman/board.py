@@ -23,8 +23,6 @@ TRANSITIONS = {
     ("running", "fail_final"): "failed",
     ("running", "fail_block"): "blocked",
     ("running", "lease_expired"): "ready",
-    ("running", "planned"): "done",
-    ("running", "plan_failed"): "failed",
     ("verifying", "verify_pass"): "done",
     ("verifying", "verify_fail"): "ready",
     ("verifying", "verify_fail_block"): "blocked",
